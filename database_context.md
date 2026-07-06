@@ -32,7 +32,18 @@ This is the Chinook sample database — a relational database representing a dig
 The catalog contains multiple genres including Rock, Jazz, Metal, Pop, R&B/Soul, Blues, Classical, etc. Rock is the most represented genre.
 
 ### Customers
-The database includes customers from various countries (USA, Canada, India, etc.). Notable customers include Luis, Fernando, Pedro, Julia, and others.
+The database includes 59 customers from various countries (USA, Canada, India, Brazil, Germany, etc.). Notable customers include Luis Gonçalves, Fernando, Pedro, Julia, and others.
+
+### Customer Identification
+For customer lookup, **email address is the preferred identifier** because it is guaranteed unique in the Customer table. Name-based lookups are supported as a fallback but may return multiple matches (e.g., "John Gordon" appears twice).
+
+The Customer table fields are:
+- `CustomerId` — Unique internal ID (not user-facing)
+- `FirstName`, `LastName` — Full name (may have collisions)
+- `Company` — Company name (nullable, not unique)
+- `City`, `Country` — Location (not unique)
+- `Phone` — Phone number (unique but hard to remember)
+- `Email` — **Email address (unique, preferred identifier)**
 
 ### Inventory
 - ~3500 tracks
