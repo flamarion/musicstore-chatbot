@@ -35,7 +35,7 @@ Full diagram and component table: [README.md](README.md#architecture).
 | [support_bot.py](support_bot.py) | Chinook DB access via `_retrieve()` (traced `retriever`) + tool implementations, catalog queries, email-only identity gate (`resolve_customer_for_pii`) |
 | [demo.py](demo.py) | Sample (`--sample`) and interactive runners; `resolve_consent()` handles the HITL interrupt/resume |
 | [langgraph.json](langgraph.json) | LangGraph Server/Studio config → `app.py:make_graph` (deploy the graph via `langgraph dev` / `langgraph up`) |
-| [docker-compose.yml](docker-compose.yml) · [Dockerfile](Dockerfile) · [Dockerfile.chat-ui](Dockerfile.chat-ui) | Full-stack deploy: llama.cpp + agent server (Postgres/Redis) + agent-chat-ui on the `ai-stack` network (`llama.env.example` for the model) |
+| [docker-compose.yml](docker-compose.yml) · [Dockerfile](Dockerfile) · [Dockerfile.chat-ui](Dockerfile.chat-ui) | Full-stack deploy: agent server (Postgres/Redis) + agent-chat-ui on the `ai-stack` network; runs on a laptop, model comes from `.env` (remote `LLM_ENDPOINT` / `ANTHROPIC_API_KEY`) — no bundled model |
 | [database_context.md](database_context.md) | Schema/data insights, served on demand via `store_reference_tool` (not baked into every prompt) |
 | [README.md](README.md) | User-facing overview, architecture, 59 test accounts, config |
 | [PROJECT_STATUS.md](PROJECT_STATUS.md) | Current state, roadmap, recent changes |
@@ -106,6 +106,7 @@ TRACE_ENABLED=1 python demo.py   # middleware logging (redacts PII by default)
   from a `ChatPromptTemplate` via `@dynamic_prompt`). Keep run types honest — don't tag a
   non-retrieval as a retriever just to decorate the trace.
 - **Deploy the whole thing with `docker compose up --build`** (see README "Full stack with a chat
-  UI"): llama.cpp + `langgraph-api` (from the generated `Dockerfile`) + Postgres + Redis +
-  `agent-chat-ui`, all on the external `ai-stack` network. The server needs `LANGSMITH_API_KEY`
-  in `.env` (license); the compose overrides `LLM_ENDPOINT` to `http://llama:8033/v1`.
+  UI"): `langgraph-api` (from the generated `Dockerfile`) + Postgres + Redis + `agent-chat-ui`, all
+  on the external `ai-stack` network. Runs on a laptop — **no bundled model**; the containerized
+  agent reads `LLM_ENDPOINT` (remote OpenAI-compatible host) / `ANTHROPIC_API_KEY` straight from
+  `.env` (compose no longer overrides them). The server needs `LANGSMITH_API_KEY` in `.env` (license).

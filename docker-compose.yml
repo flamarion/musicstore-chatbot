@@ -1,14 +1,16 @@
-# Self-contained deployment: local llama.cpp model + the LangGraph agent server
-# (Postgres + Redis for persistence) + LangChain's agent-chat-ui — all on one
-# network so the browser can chat with the support bot end-to-end.
+# Self-contained deployment: the LangGraph agent server (Postgres + Redis for
+# persistence) + LangChain's agent-chat-ui — all on one network so the browser
+# can chat with the support bot end-to-end.  The model is NOT run here: the agent
+# talks to whatever backend you configure in ./.env (a remote OpenAI-compatible
+# LLM_ENDPOINT, or ANTHROPIC_API_KEY for hosted Claude) — same as the standalone CLI.
 #
-# Bring it up on the GPU host:
-#     UID=$(id -u) GID=$(id -g) docker compose up --build
+# Bring it up locally:
+#     docker compose up --build
 # then open http://localhost:3000
 #
-# Requires: an NVIDIA GPU host with the container toolkit, a ./llama.env for the
-# model, ~/models holding the GGUF, and LANGSMITH_API_KEY set in ./.env (the
-# self-hosted LangGraph server needs it for its license, and it also drives tracing).
+# Requires: ./.env with LANGSMITH_API_KEY (the self-hosted LangGraph server needs
+# it for its license; it also drives tracing) and a reachable model backend
+# (LLM_ENDPOINT pointing at your remote model host, or ANTHROPIC_API_KEY).
 name: musicstore-chatbot
 
 volumes:
@@ -21,33 +23,6 @@ networks:
     driver: bridge
 
 services:
-  # ---- Local model: llama.cpp server on the GPUs (OpenAI-compatible API) -------
-  llama:
-    image: ghcr.io/ggml-org/llama.cpp:server-cuda
-    restart: unless-stopped
-    # Run as the host user so files written under /models stay owned by you.
-    user: "${UID:-1000}:${GID:-1000}"
-    env_file:
-      - ./llama.env
-    ports:
-      - "8033:8033"
-    volumes:
-      - ${HOME}/models:/models
-    networks:
-      - ai
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              # Host-specific GPU UUIDs — replace with your own (`nvidia-smi -L`).
-              device_ids:
-                - "GPU-aadc3ce2-e583-e796-6128-b044ec01fb4c"
-                - "GPU-addff0a1-bc13-627a-4a7f-a28477adab3d"
-                - "GPU-c6cd2bbc-be17-ad9d-5907-86f679115e30"
-                - "GPU-c997c55f-243e-527f-372a-752a6622fc98"
-              capabilities: [gpu]
-
   # ---- Persistence for the LangGraph server -----------------------------------
   langgraph-redis:
     image: redis:7
@@ -95,18 +70,16 @@ services:
         condition: service_healthy
       langgraph-postgres:
         condition: service_healthy
-      llama:
-        condition: service_started
     environment:
       # Persistence injected by the platform (make_graph has no local checkpointer).
       REDIS_URI: redis://langgraph-redis:6379
       POSTGRES_URI: postgres://postgres:postgres@langgraph-postgres:5432/postgres?sslmode=disable
-      # Reach llama.cpp by service name on the shared network (overrides .env's host IP).
-      LLM_PROVIDER: local
-      LLM_ENDPOINT: http://llama:8033/v1
     env_file:
-      # LANGSMITH_API_KEY (server license + tracing), LANGSMITH_* , LLM_MODEL,
-      # LLM_TEMPERATURE, MAX_OUTPUT_TOKENS, ...  (LLM_ENDPOINT above wins over any here.)
+      # Model backend + tracing come entirely from .env — same config as the
+      # standalone CLI: LLM_ENDPOINT (your remote model host) or ANTHROPIC_API_KEY,
+      # plus LLM_MODEL / LLM_TEMPERATURE / MAX_OUTPUT_TOKENS and LANGSMITH_API_KEY
+      # (self-hosted server license + tracing).  The container reaches LLM_ENDPOINT
+      # over your LAN/internet, so a remote host (e.g. http://192.168.1.163:8033/v1) works.
       - .env
     networks:
       - ai

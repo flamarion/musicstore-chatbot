@@ -249,9 +249,10 @@ curl -s http://localhost:2024/runs/wait -H "Content-Type: application/json" -d '
 
 Notes:
 
-- **Model connectivity** — the agent reaches your LLM via `LLM_ENDPOINT`. A LAN IP like
-  `http://192.168.1.163:8033/v1` resolves from *inside* the container, so a Dockerized agent
-  talks to the local model with low latency on the same box (no `host.docker.internal` needed).
+- **Model connectivity** — the agent reaches your LLM via `LLM_ENDPOINT`. A LAN/remote IP like
+  `http://192.168.1.163:8033/v1` resolves from *inside* the container (bridge NAT reaches your
+  LAN/internet), so the Dockerized agent talks to a remote model host with no `host.docker.internal`
+  or in-compose model service needed.
 - **Persistence** — under the server, threads/state live in Postgres (Docker) or in-memory
   (`langgraph dev`); that's why `make_graph()` omits the `InMemorySaver` the CLI demo uses.
 - `langgraph dev` (and lightweight self-host) is free with a LangSmith key; a full production
@@ -259,26 +260,28 @@ Notes:
 
 ### Full stack with a chat UI (Docker Compose)
 
-For a one-command deployment — **local model + agent server + a web chat UI** — the repo ships a
-[docker-compose.yml](docker-compose.yml) that stands up four things on one Docker network:
+For a one-command deployment — **agent server + a web chat UI** — the repo ships a
+[docker-compose.yml](docker-compose.yml) that stands up four things on one Docker network. The
+**model is not run here**: the agent talks to whatever backend you set in `.env` (a remote
+OpenAI-compatible `LLM_ENDPOINT`, or `ANTHROPIC_API_KEY` for hosted Claude), exactly like the
+standalone CLI — so the stack runs on a plain laptop with no GPU.
 
 | Service | Image / build | Port | Role |
 |---|---|---|---|
-| `llama` | `ghcr.io/ggml-org/llama.cpp:server-cuda` | `8033` | the local model on your GPUs (OpenAI-compatible) |
 | `langgraph-api` | built from [Dockerfile](Dockerfile) (`app.py:make_graph`) | `8123` | the support-bot agent as a streaming REST API |
 | `langgraph-postgres` / `langgraph-redis` | `pgvector/pgvector:pg16` · `redis:7` | — | persistent threads + interrupts for the server |
 | `agent-chat-ui` | built from [Dockerfile.chat-ui](Dockerfile.chat-ui) ([langchain-ai/agent-chat-ui](https://github.com/langchain-ai/agent-chat-ui)) | `3000` | a web chat that renders the agent **and its consent interrupts** |
 
 ```bash
-# 1. Model config for llama.cpp (points at your GGUF under ~/models)
-cp llama.env.example llama.env && $EDITOR llama.env
-
-# 2. .env must have LANGSMITH_API_KEY set — the self-hosted LangGraph server
-#    needs it for its license (it also drives tracing).
+# 1. .env must have a reachable model backend and LANGSMITH_API_KEY:
+#    - LLM_ENDPOINT=http://<your-model-host>:8033/v1  (remote OpenAI-compatible server)
+#      or ANTHROPIC_API_KEY=sk-ant-...                (hosted Claude)
+#    - LANGSMITH_API_KEY — the self-hosted LangGraph server needs it for its
+#      license (it also drives tracing).
 grep -q LANGSMITH_API_KEY .env || echo "LANGSMITH_API_KEY=lsv2_..." >> .env
 
-# 3. Build + run the whole stack (UID/GID keep model files owned by you)
-UID=$(id -u) GID=$(id -g) docker compose up --build
+# 2. Build + run the whole stack
+docker compose up --build
 ```
 
 Then open **<http://localhost:3000>**, point the UI at graph `support_bot`, and chat. Asking for a
@@ -287,14 +290,16 @@ consent card** — the `HumanInTheLoopMiddleware` interrupt — before any data 
 
 How it fits together:
 
-- **Networking** — every service shares the `ai` network (external name `ai-stack`), so the agent
-  reaches the model by service name at `http://llama:8033/v1` (the compose overrides `LLM_ENDPOINT`
-  for the container; your `.env` value only affects the local CLI).
+- **Model backend** — the containerized agent reads `LLM_ENDPOINT` / `ANTHROPIC_API_KEY` straight
+  from `.env` (compose no longer overrides them). The container reaches `LLM_ENDPOINT` over your
+  LAN/internet, so a remote model host (e.g. `http://192.168.1.163:8033/v1`) works from the laptop.
+- **Networking** — the four services share the `ai` network (external name `ai-stack`) for
+  Postgres/Redis and the UI→agent proxy hop.
 - **Chat UI in proxy mode** — the browser only talks to the UI's own same-origin `/api`, which
   forwards server-side to `http://langgraph-api:8000`. No CORS to configure, and the LangSmith key
-  never reaches the client. `NEXT_PUBLIC_*` config is baked at image build time (Next.js).
-- **GPU** — the `llama` service pins host-specific GPU UUIDs; replace them with yours from
-  `nvidia-smi -L`. `llama.env` (git-ignored) holds the model path and server flags.
+  never reaches the client. `NEXT_PUBLIC_*` config is baked at image build time (Next.js), so
+  `NEXT_PUBLIC_API_URL` assumes you open the UI at `http://localhost:3000` (running it locally, that
+  holds; to reach it from another machine, rebuild with that host or tunnel port 3000).
 
 ## Configuration
 
