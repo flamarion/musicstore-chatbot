@@ -1,499 +1,475 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="light">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Music-Store Support Bot — Demo Deck</title>
 <style>
-  /* ------------------------------------------------------------------ *
-   * Committed dark "trace-console" world — this is a keynote surface,
-   * a deliberate single theme (a LangSmith trace viewer at night).
-   * ------------------------------------------------------------------ */
+  /* ============================================================= *
+   *  Clean neutral keynote · one blue highlight, one amber signal
+   *  Fixed 1280×720 stage scaled to fill the screen (no overflow)
+   * ============================================================= */
   :root{
-    --bg:#0C1917; --bg-2:#0f1f1d; --panel:#12211F; --panel-2:#16302B;
-    --line:#244039; --line-soft:#1b322d;
-    --ink:#ECF3F1; --ink-soft:#C4D4D0; --muted:#7E958F; --faint:#5b716b;
-    --teal:#46C4B7; --teal-deep:#2A8A81; --teal-soft:#11332F;
-    --amber:#F0A83C; --amber-soft:#2c2413;
-    --violet:#B98CE0; --blue:#5FA8E0; --green:#6FCF97; --red:#E97F6E;
-    /* run-type span colors (the LangSmith trace vocabulary) */
-    --rt-prompt:#B98CE0; --rt-retriever:#46C4B7; --rt-parser:#F0A83C;
-    --rt-tool:#5FA8E0; --rt-llm:#6FCF97;
+    --paper:#FBFBFC; --panel:#FFFFFF; --fill:#F2F3F5;
+    --ink:#16191F; --ink-2:#464D57; --muted:#79808A; --faint:#A6ADB5;
+    --line:#E6E8EC; --line-2:#EEEFF2;
+    --accent:#2B4BF2; --accent-ink:#1E39C4; --accent-wash:#ECEFFE;
+    --signal:#C2670B; --signal-wash:#FBF0E1;
+    /* run-type vocabulary — the signature, used on one slide only */
+    --rt-prompt:#6D4AD6; --rt-retriever:#1C7FE0; --rt-parser:#C2670B;
+    --rt-tool:#0E8C86; --rt-llm:#1E9E63; --rt-chain:#8A93A0;
     --sans:system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
-    --mono:ui-monospace,"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;
-    --maxw:1080px;
+    --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+    --shadow:0 1px 2px rgba(20,26,40,.04), 0 12px 30px rgba(20,26,40,.06);
+  }
+  :root[data-theme="dark"]{
+    --paper:#0E1116; --panel:#161A21; --fill:#1A1F27;
+    --ink:#F1F3F6; --ink-2:#B7BEC8; --muted:#828A94; --faint:#5C646E;
+    --line:#242A32; --line-2:#1E242C;
+    --accent:#5C7CFF; --accent-ink:#93A6FF; --accent-wash:#18203A;
+    --signal:#E0983A; --signal-wash:#2A2114;
+    --rt-prompt:#9A7BF0; --rt-retriever:#4EA0F0; --rt-parser:#E0983A;
+    --rt-tool:#2FBDB4; --rt-llm:#45C489; --rt-chain:#5C646E;
+    --shadow:0 1px 2px rgba(0,0,0,.3), 0 14px 34px rgba(0,0,0,.35);
   }
   *{box-sizing:border-box}
-  html,body{height:100%}
-  body{
-    margin:0; background:
-      radial-gradient(1200px 700px at 80% -10%, #123430 0%, transparent 55%),
-      radial-gradient(900px 600px at 0% 110%, #14201d 0%, transparent 50%),
-      var(--bg);
-    color:var(--ink); font-family:var(--sans);
-    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
-    overflow:hidden;
-  }
-  ::selection{background:var(--teal-deep); color:#04110f}
+  html,body{height:100%; margin:0}
+  body{background:var(--paper); color:var(--ink); font-family:var(--sans);
+       -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility; overflow:hidden}
+  ::selection{background:var(--accent); color:#fff}
 
-  /* deck plumbing ---------------------------------------------------- */
-  .deck{position:fixed; inset:0}
-  .slide{
-    position:absolute; inset:0; display:none;
-    padding:clamp(34px,6vh,72px) clamp(30px,7vw,110px) 92px;
-    flex-direction:column; justify-content:center;
-    opacity:0;
-  }
-  .slide.active{display:flex; opacity:1}
-  .slide .inner{width:100%; max-width:var(--maxw); margin:0 auto}
+  /* stage scaling ------------------------------------------------ */
+  .viewport{position:fixed; inset:0; display:grid; place-items:center; overflow:hidden; background:var(--paper)}
+  .stage{width:1280px; height:720px; position:relative; overflow:hidden;
+         background:var(--paper); transform:scale(var(--s,1)); transform-origin:center center}
+
+  .rail{position:absolute; top:0; left:0; height:3px; background:var(--accent); z-index:5;
+        transition:width .4s cubic-bezier(.2,.7,.2,1)}
+  @media (prefers-reduced-motion:reduce){.rail{transition:none}}
+
+  /* slides ------------------------------------------------------- */
+  .slide{position:absolute; inset:0; padding:64px 76px 74px; display:none; flex-direction:column}
+  .slide.on{display:flex}
   @media (prefers-reduced-motion:no-preference){
-    .slide.active .inner{animation:rise .5s cubic-bezier(.2,.7,.2,1) both}
-    @keyframes rise{from{opacity:0; transform:translateY(14px)} to{opacity:1; transform:none}}
+    .slide.on>*{animation:rise .45s cubic-bezier(.2,.7,.2,1) both}
+    .slide.on>*:nth-child(2){animation-delay:.05s}
+    .slide.on>*:nth-child(3){animation-delay:.09s}
+    @keyframes rise{from{opacity:0; transform:translateY(12px)} to{opacity:1; transform:none}}
   }
 
-  /* eyebrow + headings ---------------------------------------------- */
-  .eyebrow{
-    font-family:var(--mono); font-size:clamp(.68rem,1vw,.8rem);
-    letter-spacing:.22em; text-transform:uppercase; color:var(--teal);
-    display:flex; align-items:center; gap:10px; margin-bottom:18px; font-weight:600;
-  }
-  .eyebrow::before{content:""; width:26px; height:1px; background:var(--teal); opacity:.7}
-  h1{font-size:clamp(2.2rem,6vw,4.4rem); line-height:1.02; letter-spacing:-.025em;
-     margin:0 0 .3em; font-weight:800; text-wrap:balance}
-  h2{font-size:clamp(1.7rem,4.2vw,3rem); line-height:1.06; letter-spacing:-.02em;
-     margin:0 0 .5em; font-weight:780; text-wrap:balance}
-  .lede{font-size:clamp(1.05rem,1.9vw,1.4rem); color:var(--ink-soft); line-height:1.5;
-        max-width:60ch; margin:0}
-  .dim{color:var(--muted)}
-  b,strong{color:#fff; font-weight:680}
-  code{font-family:var(--mono); font-size:.86em; color:var(--teal);
-       background:var(--teal-soft); padding:1px 6px; border-radius:5px}
-  .amber{color:var(--amber)}
-  .tealtx{color:var(--teal)}
+  /* type & shared ------------------------------------------------ */
+  .eyebrow{font-family:var(--mono); font-size:15px; letter-spacing:.2em; text-transform:uppercase;
+           color:var(--accent-ink); font-weight:600; display:flex; align-items:center; gap:14px}
+  .eyebrow::before{content:""; width:30px; height:2px; background:var(--accent); border-radius:2px}
+  h1{font-size:80px; line-height:1.02; letter-spacing:-.03em; font-weight:800; margin:24px 0 0; max-width:20ch; text-wrap:balance}
+  h2{font-size:50px; line-height:1.06; letter-spacing:-.022em; font-weight:790; margin:20px 0 0; max-width:24ch; text-wrap:balance}
+  .hl{color:var(--accent)}
+  .lede{font-size:26px; line-height:1.45; color:var(--ink-2); max-width:60ch; margin:22px 0 0; font-weight:420}
+  b,strong{font-weight:680; color:var(--ink)}
+  code{font-family:var(--mono); font-size:.82em; color:var(--accent-ink); background:var(--accent-wash);
+       padding:2px 7px; border-radius:6px; white-space:nowrap}
+  .head{flex:0 0 auto}
+  .body{flex:1 1 auto; display:flex; flex-direction:column; justify-content:center; min-height:0}
+  .body.top{justify-content:flex-start; padding-top:34px}
 
-  /* cover ------------------------------------------------------------ */
-  .cover h1{max-width:16ch}
-  .cover .sig{margin-top:30px; display:flex; flex-wrap:wrap; gap:8px}
-  .tag{font-family:var(--mono); font-size:.74rem; letter-spacing:.04em;
-       border:1px solid var(--line); border-radius:999px; padding:5px 13px;
-       color:var(--ink-soft); background:rgba(255,255,255,.02)}
-  .tag b{color:var(--teal); font-weight:600}
+  /* tags (cover) ------------------------------------------------- */
+  .tags{display:flex; flex-wrap:wrap; gap:10px; margin-top:34px}
+  .tag{font-family:var(--mono); font-size:16px; color:var(--ink-2); background:var(--panel);
+       border:1px solid var(--line); border-radius:999px; padding:8px 16px}
+  .tag b{color:var(--accent-ink); font-weight:600}
 
-  /* generic bits ----------------------------------------------------- */
-  .cols{display:grid; grid-template-columns:1fr 1fr; gap:clamp(16px,2.6vw,30px); align-items:start}
-  .cols.c3{grid-template-columns:repeat(3,1fr)}
-  .cols.c4{grid-template-columns:repeat(4,1fr)}
-  @media (max-width:860px){.cols,.cols.c3,.cols.c4{grid-template-columns:1fr 1fr}}
-  .stack{display:flex; flex-direction:column; gap:14px}
+  /* bullets ------------------------------------------------------ */
+  .bullets{list-style:none; margin:30px 0 0; padding:0; display:flex; flex-direction:column; gap:20px; max-width:56ch}
+  .bullets li{display:grid; grid-template-columns:26px 1fr; gap:16px; font-size:26px; line-height:1.38; color:var(--ink-2)}
+  .bullets li::before{content:""; width:11px; height:11px; margin-top:11px; border-radius:3px; background:var(--accent)}
+  .bullets li.sig::before{background:var(--signal)}
+  .bullets li b{color:var(--ink)}
+  .bullets li .lead{color:var(--ink); font-weight:680}
 
-  .card{background:linear-gradient(180deg,var(--panel-2),var(--panel));
-        border:1px solid var(--line); border-radius:14px; padding:18px 18px 16px;
-        display:flex; flex-direction:column; gap:8px}
-  .card h3{margin:0; font-size:1.08rem; font-weight:720; letter-spacing:-.01em}
-  .card .role{font-family:var(--mono); font-size:.7rem; letter-spacing:.1em;
-              text-transform:uppercase; color:var(--muted)}
-  .card p{margin:0; font-size:.94rem; color:var(--ink-soft); line-height:1.5}
-  .card .use{font-size:.86rem; color:var(--muted)}
-  .card .use b{color:var(--teal); font-weight:600}
-  .card.smith{border-color:#3a2f52}
-  .card.smith .role{color:var(--violet)}
+  /* pull line / say-it ------------------------------------------ */
+  .pull{margin-top:30px; border-left:3px solid var(--accent); padding:6px 0 6px 20px; max-width:64ch}
+  .pull .l{font-family:var(--mono); font-size:13px; letter-spacing:.14em; text-transform:uppercase;
+           color:var(--accent-ink); font-weight:700; display:block; margin-bottom:6px}
+  .pull i{font-style:italic; font-size:21px; line-height:1.4; color:var(--ink)}
 
-  .badge{align-self:flex-start; font-family:var(--mono); font-size:.64rem;
-         letter-spacing:.08em; text-transform:uppercase; font-weight:700;
-         padding:3px 8px; border-radius:6px; background:var(--teal-soft); color:var(--teal)}
-  .badge.v{background:#241d33; color:var(--violet)}
-  .badge.a{background:var(--amber-soft); color:var(--amber)}
+  /* card grid ---------------------------------------------------- */
+  .grid{display:grid; gap:22px; margin-top:36px}
+  .grid.g4{grid-template-columns:repeat(4,1fr)}
+  .grid.g2{grid-template-columns:1fr 1fr; gap:26px}
+  .card{background:var(--panel); border:1px solid var(--line); border-radius:16px; padding:24px 22px;
+        display:flex; flex-direction:column; gap:10px; box-shadow:var(--shadow)}
+  .card .kbadge{font-family:var(--mono); font-size:12.5px; letter-spacing:.08em; text-transform:uppercase;
+                font-weight:700; color:var(--accent-ink); background:var(--accent-wash);
+                align-self:flex-start; padding:4px 9px; border-radius:6px}
+  .card .kbadge.amb{color:var(--signal); background:var(--signal-wash)}
+  .card h3{margin:2px 0 0; font-size:23px; font-weight:740; letter-spacing:-.01em}
+  .card .role{font-family:var(--mono); font-size:13px; letter-spacing:.05em; text-transform:uppercase; color:var(--muted); margin-top:-4px}
+  .card p{margin:0; font-size:17.5px; line-height:1.45; color:var(--ink-2)}
+  .card .tools{font-family:var(--mono); font-size:15px; color:var(--ink-2); line-height:1.7}
+  .card p .use{color:var(--ink); font-weight:640}
 
-  ul.clean{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:11px}
-  ul.clean li{display:grid; grid-template-columns:20px 1fr; gap:12px;
-              font-size:clamp(.98rem,1.5vw,1.12rem); color:var(--ink-soft); line-height:1.4}
-  ul.clean li::before{content:"▹"; color:var(--teal); font-weight:700}
-  ul.clean li.a::before{content:"▹"; color:var(--amber)}
-  ul.clean li b{color:#fff}
+  /* two-column meaty list (reliability / friction) --------------- */
+  .mlist{display:grid; grid-template-columns:1fr 1fr; gap:22px 44px; margin-top:34px}
+  .mi{border-top:2px solid var(--line); padding-top:15px}
+  .mi .k{font-size:22px; font-weight:720; letter-spacing:-.01em; display:flex; align-items:baseline; gap:10px}
+  .mi .tagm{font-family:var(--mono); font-size:12px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); font-weight:600}
+  .mi.amb{border-top-color:var(--signal)}
+  .mi.amb .k{color:var(--ink)}
+  .mi .d{font-size:17px; line-height:1.42; color:var(--ink-2); margin-top:5px}
+  .mi .d b{color:var(--accent-ink)}
 
-  /* presenter "say it" cue ------------------------------------------ */
-  .sayit{border-left:2px solid var(--teal); background:rgba(70,196,183,.06);
-         border-radius:0 10px 10px 0; padding:12px 16px; margin-top:22px; max-width:70ch}
-  .sayit .l{font-family:var(--mono); font-size:.64rem; letter-spacing:.14em;
-            text-transform:uppercase; color:var(--teal); font-weight:700; display:block; margin-bottom:5px}
-  .sayit i{font-style:italic; color:var(--ink); font-size:1rem; line-height:1.5}
+  /* pipeline (architecture) -------------------------------------- */
+  .pipe{display:flex; flex-direction:column; gap:9px}
+  .pnode{display:flex; align-items:baseline; gap:14px; background:var(--panel); border:1px solid var(--line);
+         border-radius:11px; padding:13px 16px}
+  .pnode .pk{font-family:var(--mono); font-size:16px; font-weight:700; color:var(--ink)}
+  .pnode .pd{font-family:var(--mono); font-size:13.5px; color:var(--muted)}
+  .pnode.guard{border-left:3px solid var(--signal)} .pnode.guard .pk{color:var(--signal)}
+  .pnode.core{border-left:3px solid var(--accent)} .pnode.core .pk{color:var(--accent-ink)}
+  .parrow{color:var(--faint); font-size:14px; text-align:center; line-height:.4; margin-left:8px}
+  .whys{display:flex; flex-direction:column; gap:18px; justify-content:center}
+  .why .wk{font-family:var(--mono); font-size:13px; letter-spacing:.06em; text-transform:uppercase; color:var(--accent-ink); font-weight:700}
+  .why .wd{font-size:19px; line-height:1.4; color:var(--ink-2); margin-top:4px}
+  .why .wd b{color:var(--ink)}
 
-  /* trace-waterfall motif — the LangSmith run vocabulary ------------- */
-  .wf{display:flex; flex-direction:column; gap:7px; font-family:var(--mono);
-      background:var(--bg-2); border:1px solid var(--line); border-radius:12px; padding:16px}
-  .wf .row{display:grid; grid-template-columns:112px 1fr; gap:14px; align-items:center}
-  .wf .rk{font-size:.72rem; color:var(--muted); text-align:right; white-space:nowrap}
-  .wf .track{position:relative; height:26px}
-  .wf .bar{position:absolute; top:0; height:26px; border-radius:6px; display:flex;
-           align-items:center; padding:0 10px; font-size:.72rem; color:#06120f;
-           font-weight:700; white-space:nowrap; overflow:hidden}
+  /* numbered prompts (a real sequence) --------------------------- */
+  .flow{display:flex; flex-direction:column; gap:14px; margin-top:30px}
+  .step{display:grid; grid-template-columns:44px 1fr; gap:18px; align-items:center;
+        background:var(--panel); border:1px solid var(--line); border-radius:13px; padding:16px 20px; box-shadow:var(--shadow)}
+  .step .num{font-family:var(--mono); font-size:19px; font-weight:700; color:#fff; background:var(--accent);
+             width:38px; height:38px; border-radius:9px; display:grid; place-items:center}
+  .step .say{font-size:22px; font-weight:640; color:var(--ink)}
+  .step .arrow{color:var(--muted); font-weight:400}
+  .step .sub{display:block; font-size:15.5px; color:var(--muted); margin-top:3px; font-weight:400}
+
+  /* trace waterfall — the signature ------------------------------ */
+  .wf{background:var(--fill); border:1px solid var(--line); border-radius:14px; padding:20px; display:flex; flex-direction:column; gap:9px}
+  .wf .wr{display:grid; grid-template-columns:96px 1fr; gap:16px; align-items:center}
+  .wf .wk{font-family:var(--mono); font-size:14px; color:var(--muted); text-align:right}
+  .wf .track{position:relative; height:30px}
+  .wf .bar{position:absolute; top:0; height:30px; border-radius:7px; display:flex; align-items:center;
+           padding:0 11px; font-family:var(--mono); font-size:13.5px; font-weight:600; color:#fff; white-space:nowrap; overflow:hidden}
   .bar.prompt{background:var(--rt-prompt)} .bar.retriever{background:var(--rt-retriever)}
   .bar.parser{background:var(--rt-parser)} .bar.tool{background:var(--rt-tool)}
-  .bar.llm{background:var(--rt-llm)} .bar.chain{background:#3b5450; color:var(--ink)}
-  .rtlegend{display:flex; flex-wrap:wrap; gap:7px 14px; margin-top:14px; font-family:var(--mono); font-size:.74rem; color:var(--muted)}
-  .rtlegend span{display:inline-flex; align-items:center; gap:6px}
-  .rtlegend i{width:11px; height:11px; border-radius:3px; display:inline-block}
+  .bar.llm{background:var(--rt-llm)} .bar.chain{background:var(--rt-chain)}
+  .legend{display:flex; flex-wrap:wrap; gap:8px 18px; margin-top:8px; font-family:var(--mono); font-size:13.5px; color:var(--muted)}
+  .legend span{display:inline-flex; align-items:center; gap:7px}
+  .legend i{width:12px; height:12px; border-radius:4px; display:inline-block}
 
-  /* pipeline (architecture) ----------------------------------------- */
-  .pipe{display:flex; flex-direction:column; gap:8px; font-family:var(--mono); font-size:.82rem}
-  .pipe .node{display:flex; align-items:center; gap:12px; background:var(--panel);
-              border:1px solid var(--line); border-radius:10px; padding:11px 14px}
-  .pipe .node .k{color:var(--teal); font-weight:700; min-width:0}
-  .pipe .node .d{color:var(--muted)}
-  .pipe .node.guard{border-color:#5a4a24; background:#1e1a10}
-  .pipe .node.guard .k{color:var(--amber)}
-  .pipe .node.agent{border-color:var(--teal-deep); background:#0f2b28}
-  .pipe .arrow{color:var(--faint); text-align:center; font-size:.9rem; line-height:.5}
+  /* value table -------------------------------------------------- */
+  .vtable{margin-top:32px; border:1px solid var(--line); border-radius:14px; overflow:hidden}
+  .vrow{display:grid; grid-template-columns:1fr 1.35fr}
+  .vrow>div{padding:15px 24px; border-bottom:1px solid var(--line-2); font-size:19.5px}
+  .vrow:last-child>div{border-bottom:none}
+  .vrow .f{font-weight:680; color:var(--ink); background:var(--panel)}
+  .vrow .v{color:var(--ink-2); background:var(--panel)}
+  .vrow.hd>div{background:var(--fill); font-family:var(--mono); font-size:13px; letter-spacing:.09em;
+               text-transform:uppercase; color:var(--muted); padding:11px 24px}
 
-  /* value table ------------------------------------------------------ */
-  .val{display:grid; grid-template-columns:1fr 1.3fr; border:1px solid var(--line);
-       border-radius:12px; overflow:hidden}
-  .val .h{background:var(--panel-2); font-family:var(--mono); font-size:.66rem;
-          letter-spacing:.1em; text-transform:uppercase; color:var(--muted);
-          padding:9px 16px; border-bottom:1px solid var(--line)}
-  .val .c{padding:11px 16px; border-bottom:1px solid var(--line-soft); font-size:.95rem}
-  .val .c.f{font-weight:650; color:#fff} .val .c.v{color:var(--ink-soft)}
-  .val>.c:nth-last-child(-n+2){border-bottom:none}
+  /* two-panel (isolation) ---------------------------------------- */
+  .panels{display:grid; grid-template-columns:1fr 1fr; gap:26px; margin-top:34px}
+  .panel{display:flex; flex-direction:column; gap:16px}
 
-  /* prompts (demo cue) ---------------------------------------------- */
-  .prompts{display:flex; flex-direction:column; gap:10px}
-  .pr{display:grid; grid-template-columns:26px 1fr; gap:12px; align-items:start;
-      background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 15px}
-  .pr .n{font-family:var(--mono); color:var(--teal); font-weight:700; font-size:.85rem}
-  .pr .t{font-size:1rem; color:var(--ink)} .pr .t .say{color:var(--teal); font-weight:600}
-  .pr .t small{display:block; color:var(--muted); font-size:.82rem; margin-top:3px}
+  /* footer + controls ------------------------------------------- */
+  .foot{position:absolute; left:76px; right:76px; bottom:30px; display:flex; align-items:center; gap:16px;
+        font-family:var(--mono); font-size:14px; color:var(--muted); border-top:1px solid var(--line); padding-top:14px}
+  .foot .brand{color:var(--ink-2)} .foot .brand b{color:var(--accent-ink); font-weight:600}
+  .foot .sec{margin-left:auto; letter-spacing:.09em; text-transform:uppercase}
+  .foot .pg{color:var(--ink); font-variant-numeric:tabular-nums; min-width:56px; text-align:right}
 
-  /* friction --------------------------------------------------------- */
-  .fric{display:grid; grid-template-columns:1fr 1fr; gap:12px}
-  @media (max-width:860px){.fric{grid-template-columns:1fr}}
-  .fr{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:12px 15px}
-  .fr .k{font-family:var(--mono); font-size:.78rem; color:var(--amber); font-weight:700; margin-bottom:3px}
-  .fr p{margin:0; font-size:.9rem; color:var(--ink-soft); line-height:1.45}
-  .fr p b{color:var(--teal); font-weight:600}
-
-  /* chrome ----------------------------------------------------------- */
-  .chrome{position:fixed; left:0; right:0; bottom:0; height:52px; z-index:30;
-          display:flex; align-items:center; gap:16px;
-          padding:0 clamp(20px,5vw,44px);
-          font-family:var(--mono); font-size:.72rem; color:var(--muted);
-          border-top:1px solid var(--line-soft); background:linear-gradient(180deg,transparent,rgba(6,15,13,.6))}
-  .chrome .brand{color:var(--ink-soft)} .chrome .brand b{color:var(--teal); font-weight:600}
-  .chrome .sec{margin-left:auto; letter-spacing:.08em; text-transform:uppercase}
-  .chrome .count{color:var(--ink-soft); font-variant-numeric:tabular-nums}
-  .nav{display:flex; gap:6px}
-  .nav button{font-family:var(--mono); font-size:.9rem; color:var(--ink-soft);
-              background:var(--panel); border:1px solid var(--line); border-radius:7px;
-              width:30px; height:26px; cursor:pointer; line-height:1}
-  .nav button:hover{border-color:var(--teal); color:var(--teal)}
-  .nav button:focus-visible{outline:2px solid var(--teal); outline-offset:2px}
-  .progress{position:fixed; top:0; left:0; height:2px; background:var(--teal);
-            box-shadow:0 0 10px var(--teal); z-index:31; transition:width .35s cubic-bezier(.2,.7,.2,1)}
-  @media (prefers-reduced-motion:reduce){.progress{transition:none}}
-  .hint{position:fixed; bottom:60px; right:16px; z-index:30; font-family:var(--mono);
-        font-size:.68rem; color:var(--faint)}
-  kbd{font-family:var(--mono); border:1px solid var(--line); border-radius:4px;
-      padding:0 5px; color:var(--muted); font-size:.9em}
+  .controls{position:fixed; bottom:20px; right:22px; z-index:20; display:flex; gap:8px}
+  .controls button{font-family:var(--mono); font-size:16px; color:var(--ink-2); background:var(--panel);
+                   border:1px solid var(--line); border-radius:9px; width:38px; height:34px; cursor:pointer;
+                   line-height:1; box-shadow:var(--shadow)}
+  .controls button:hover{border-color:var(--accent); color:var(--accent-ink)}
+  .controls button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
+  .khint{position:fixed; bottom:26px; left:22px; z-index:20; font-family:var(--mono); font-size:13px; color:var(--faint)}
+  .khint kbd{border:1px solid var(--line); border-radius:5px; padding:1px 6px; color:var(--muted)}
 </style>
 </head>
 <body>
-<div class="progress" id="progress"></div>
+<div class="viewport">
+  <div class="stage" id="stage">
+    <div class="rail" id="rail"></div>
 
-<div class="deck" id="deck">
-
-  <!-- 1 · COVER -->
-  <section class="slide cover" data-section="Take-home">
-    <div class="inner">
-      <div class="eyebrow">Deployed Engineer · LangChain &amp; LangSmith Demo</div>
-      <h1>A support bot you can<br><span class="tealtx">see, debug, and trust.</span></h1>
-      <p class="lede">A customer-support agent for a digital music store — built on LangChain OSS, made reliable with middleware, and made <b>observable</b> with LangSmith.</p>
-      <div class="sig">
-        <span class="tag"><b>Dataset</b> &nbsp;Chinook · 59 customers</span>
-        <span class="tag"><b>Orchestration</b> &nbsp;create_agent</span>
-        <span class="tag"><b>Surface</b> &nbsp;LangSmith Studio</span>
-        <span class="tag"><b>Runtime</b> &nbsp;35 min demo + Q&amp;A</span>
+    <!-- 1 · COVER -->
+    <section class="slide" data-sec="Take-home">
+      <div class="head"><div class="eyebrow">Deployed Engineer · LangChain &amp; LangSmith Demo</div></div>
+      <div class="body">
+        <h1>A support bot you can <span class="hl">see, debug, and trust.</span></h1>
+        <p class="lede">A customer-support agent for a digital music store — built on LangChain OSS, made reliable with middleware, and made observable with LangSmith.</p>
+        <div class="tags">
+          <span class="tag"><b>Dataset</b> &nbsp;Chinook · 59 customers</span>
+          <span class="tag"><b>Orchestration</b> &nbsp;create_agent</span>
+          <span class="tag"><b>Surface</b> &nbsp;LangSmith Studio</span>
+          <span class="tag"><b>Runtime</b> &nbsp;35 min + Q&amp;A</span>
+        </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- 2 · THE PROBLEM -->
-  <section class="slide" data-section="Why we're here">
-    <div class="inner">
-      <div class="eyebrow">The problem we're solving</div>
-      <h2>You built an agent. It just isn't <span class="amber">reliable</span> yet.</h2>
-      <div class="cols" style="margin-top:8px">
-        <ul class="clean">
+    <!-- 2 · PROBLEM -->
+    <section class="slide" data-sec="Why we're here">
+      <div class="head"><div class="eyebrow">The problem we're solving</div>
+        <h2>You built an agent. It just isn't <span class="hl">reliable</span> yet.</h2></div>
+      <div class="body">
+        <ul class="bullets">
           <li>You've done real agentic work — but nothing you'd put in front of a customer.</li>
           <li>When it misbehaves, you're <b>guessing at the prompt</b> instead of seeing what happened.</li>
-          <li class="a">And it isn't clear where <b>LangSmith</b> fits, or why it matters.</li>
+          <li class="sig">And it isn't clear where <b>LangSmith</b> fits, or why it matters.</li>
         </ul>
-        <div class="card">
-          <span class="badge a">Today's thesis</span>
-          <p style="font-size:1.02rem; color:var(--ink)">Reliability isn't a rewrite. It's <b>composing the right built-ins</b> — and <b>observing</b> everything the agent does so you can debug it, test it, and trust it.</p>
-          <p class="use">That loop is exactly the gap you fell into.</p>
+        <div class="pull"><span class="l">Today's thesis</span><i>"Reliability isn't a rewrite. It's composing the right built-ins — and observing everything the agent does so you can debug it, test it, and trust it."</i></div>
+      </div>
+    </section>
+
+    <!-- 3 · OSS MAP -->
+    <section class="slide" data-sec="The stack">
+      <div class="head"><div class="eyebrow">Requirement #1 · the OSS map</div>
+        <h2>Four pieces, one job each.</h2></div>
+      <div class="body">
+        <div class="grid g4">
+          <div class="card"><span class="kbadge">Components</span><h3>LangChain</h3><div class="role">the building blocks</div><p>Model integrations, <code>@tool</code>, and the prebuilt <code>create_agent()</code> ReAct loop.</p><p><span class="use">Here:</span> the agent + 9 tools over Chinook.</p></div>
+          <div class="card"><span class="kbadge">Orchestration</span><h3>LangGraph</h3><div class="role">runs &amp; remembers</div><p>The graph runtime beneath. State via a checkpointer, control flow, interrupts.</p><p><span class="use">Here:</span> thread state, middleware, HITL.</p></div>
+          <div class="card"><span class="kbadge amb">Harness</span><h3>Deep Agents</h3><div class="role">long-horizon work</div><p>Planning, sub-agents, file memory — for multi-step tasks.</p><p><span class="use">Here:</span> evaluated &amp; declined — overkill.</p></div>
+          <div class="card"><span class="kbadge">Commercial</span><h3>LangSmith</h3><div class="role">see · test · trust</div><p>Tracing, Studio, evals, monitoring. "Works on my machine" → production.</p><p><span class="use">Here:</span> the reliability layer.</p></div>
         </div>
       </div>
-      <div class="sayit"><span class="l">Say it</span><i>"Everything I show today is aimed at one thing: turning a fragile prototype into an agent you'd actually ship — and showing you the tooling that makes that possible."</i></div>
-    </div>
-  </section>
+    </section>
 
-  <!-- 3 · OSS MAP -->
-  <section class="slide" data-section="The stack">
-    <div class="inner">
-      <div class="eyebrow">Requirement #1 · the OSS map</div>
-      <h2>Four pieces, one sentence each.</h2>
-      <div class="cols c4">
-        <div class="card"><span class="badge">Components</span><h3>LangChain</h3><div class="role">the building blocks</div><p>Model integrations, <code>@tool</code>, and the prebuilt <code>create_agent()</code> ReAct loop.</p><p class="use"><b>Here:</b> the agent + 9 tools over Chinook.</p></div>
-        <div class="card"><span class="badge">Orchestration</span><h3>LangGraph</h3><div class="role">how it runs &amp; remembers</div><p>The graph runtime beneath. State via a <b>checkpointer</b>, control flow, interrupts.</p><p class="use"><b>Here:</b> thread state, middleware hooks, HITL.</p></div>
-        <div class="card"><span class="badge">Harness</span><h3>Deep Agents</h3><div class="role">long-horizon work</div><p><code>create_deep_agent()</code> adds planning, sub-agents, file memory — for multi-step tasks.</p><p class="use"><b>Here:</b> evaluated &amp; <b>declined</b> — overkill for single-turn lookups.</p></div>
-        <div class="card smith"><span class="badge v">Commercial</span><h3>LangSmith</h3><div class="role">see · test · trust</div><p>Tracing, Studio, datasets &amp; evals, monitoring. Turns "works on my machine" into production.</p><p class="use"><b>Here:</b> the reliability layer — the whole point.</p></div>
-      </div>
-      <div class="sayit"><span class="l">Say it</span><i>"These aren't either/or. create_agent is a LangChain helper that returns a LangGraph graph. Deep Agents is a heavier harness for long-horizon tasks. And LangSmith is how you see, evaluate, and trust any of them — which is what you were missing."</i></div>
-    </div>
-  </section>
-
-  <!-- 4 · THE BOT / AREAS -->
-  <section class="slide" data-section="The build">
-    <div class="inner">
-      <div class="eyebrow">What the bot does · two areas of work</div>
-      <h2>Discovery, and the customer's own data.</h2>
-      <div class="cols">
-        <div class="card">
-          <span class="badge">Area 1 · open catalog</span>
-          <h3>Discovery &amp; recommendations</h3>
-          <p><code>browse_genre</code> · <code>top_sellers</code> · <code>albums_by_artist</code> · <code>artist_lookup</code> · <code>genre_catalog</code> · <code>inventory</code></p>
-          <p class="use">"What's popular in Alternative &amp; Punk?" · "Which Nirvana albums do you have?" — drives sales, <b>no identity needed</b>.</p>
-        </div>
-        <div class="card">
-          <span class="badge a">Area 2 · personal · gated</span>
-          <h3>Transactions &amp; personal recs</h3>
-          <p><code>purchase_history</code> (itemized: track + album) · <code>recommendation</code> (from real purchases)</p>
-          <p class="use">"What albums did I buy?" — real support work, released <b>only on verified identity</b> (two slides on).</p>
+    <!-- 4 · TWO AREAS -->
+    <section class="slide" data-sec="The build">
+      <div class="head"><div class="eyebrow">What the bot does · two areas of work</div>
+        <h2>Discovery, and the customer's own data.</h2></div>
+      <div class="body">
+        <div class="grid g2">
+          <div class="card"><span class="kbadge">Area 1 · open catalog</span><h3>Discovery &amp; recommendations</h3><p class="tools">browse_genre · top_sellers · albums_by_artist<br>artist_lookup · genre_catalog · inventory</p><p>"What's popular in Alternative &amp; Punk?" · "Which Nirvana albums do you have?" — <span class="use">drives sales, no identity needed.</span></p></div>
+          <div class="card"><span class="kbadge amb">Area 2 · personal · gated</span><h3>Transactions &amp; personal recs</h3><p class="tools">purchase_history &nbsp;(itemized: track + album)<br>recommendation &nbsp;(from real purchases)</p><p>"What albums did I buy?" — real support work, <span class="use">released only on verified identity.</span></p></div>
         </div>
       </div>
-      <ul class="clean" style="margin-top:20px">
-        <li>Nine tools, but <b>two business areas</b> — depth over breadth, as the brief asks.</li>
-        <li class="a">The split isn't cosmetic: catalog is <b>open</b>; personal data is <b>PII-gated</b>. Same bot, different policy.</li>
-      </ul>
-    </div>
-  </section>
+    </section>
 
-  <!-- 5 · COGNITIVE ARCHITECTURE -->
-  <section class="slide" data-section="The build">
-    <div class="inner">
-      <div class="eyebrow">The cognitive architecture</div>
-      <h2>A prebuilt agent, wrapped in guardrails.</h2>
-      <div class="cols" style="grid-template-columns:1.15fr .85fr">
-        <div class="pipe">
-          <div class="node"><span class="k">user + thread_id</span></div>
-          <div class="arrow">↓</div>
-          <div class="node guard"><span class="k">ProfanityGuard → TopicGuard</span><span class="d">before_model · short-circuit, no LLM cost</span></div>
-          <div class="arrow">↓</div>
-          <div class="node"><span class="k">system_prompt</span><span class="d">@dynamic_prompt · fresh each turn</span></div>
-          <div class="arrow">↓</div>
-          <div class="node"><span class="k">CallLimit · Summarize · PII · Retry</span><span class="d">built-in middleware stack</span></div>
-          <div class="arrow">↓</div>
-          <div class="node agent"><span class="k">create_agent ⇄ 9 tools</span><span class="d">ReAct: think → act → observe · Chinook</span></div>
-          <div class="arrow">↓</div>
-          <div class="node guard"><span class="k">HumanInTheLoop</span><span class="d">consent interrupt before personal data</span></div>
-          <div class="arrow">↓</div>
-          <div class="node"><span class="k">reply</span><span class="d">InMemorySaver persists messages + strikes</span></div>
-        </div>
-        <div class="stack">
-          <div class="card"><div class="role">Why ReAct</div><p>The job is "pick the right tool and answer." A prebuilt agent ⇄ tools loop fits exactly — <b>no bespoke graph</b>.</p></div>
-          <div class="card"><div class="role">Why middleware</div><p>Limits, retry, PII, guardrails, consent are <b>cross-cutting</b>. Middleware keeps them out of tool logic.</p></div>
-          <div class="card"><div class="role">Why a checkpointer</div><p>Production agents are multi-turn. LangGraph owns state; the client stays thin.</p></div>
-        </div>
-      </div>
-      <div class="sayit"><span class="l">Say it · then show it in Studio</span><i>"I stayed with the prebuilt agent and expressed everything else as middleware — because for a support bot the intelligence is in the tools and the guardrails, not a custom graph. Studio's graph view is how I'd walk you through it live."</i></div>
-    </div>
-  </section>
-
-  <!-- 6 · DEMO CUE: SUPPORT FLOW -->
-  <section class="slide" data-section="Live demo">
-    <div class="inner">
-      <div class="eyebrow">Live · a realistic support flow</div>
-      <h2>Five turns that tell the whole story.</h2>
-      <div class="prompts">
-        <div class="pr"><span class="n">01</span><div class="t"><span class="say">"Do you have Nirvana? Which albums?"</span><small>Open catalog — albums_by_artist. No identity needed.</small></div></div>
-        <div class="pr"><span class="n">02</span><div class="t"><span class="say">"What albums did I buy?"</span> → <span class="dim">bot asks for the email on the account</span><small>Identity gate: a name is not enough.</small></div></div>
-        <div class="pr"><span class="n">03</span><div class="t"><span class="say">"kara.nielsen@jubii.dk"</span> → <span class="dim">consent card → approve → itemized history</span><small>HITL consent interrupt, then the real data.</small></div></div>
-        <div class="pr"><span class="n">04</span><div class="t"><span class="say">"Based on my orders, my preferred style?"</span><small>Recommendation runs — <b>no second consent</b> (once per email per thread).</small></div></div>
-        <div class="pr"><span class="n">05</span><div class="t"><span class="say">"Write me a Python script."</span> → <span class="dim">politely declines, steers back</span><small>Scope guardrail — stays a music-store bot.</small></div></div>
-      </div>
-      <div class="sayit"><span class="l">Point</span><i>"One conversation shows discovery, identity, consent, memory, and scope control — the exact behaviors a real store needs."</i></div>
-    </div>
-  </section>
-
-  <!-- 7 · DATA ISOLATION -->
-  <section class="slide" data-section="Trust &amp; safety">
-    <div class="inner">
-      <div class="eyebrow">Named in the brief · "how does a customer see only their own info?"</div>
-      <h2>Identity is <span class="tealtx">email-only</span>, enforced in code.</h2>
-      <div class="cols">
-        <div class="stack">
-          <div class="card"><span class="badge">The two-"Luis" problem</span><p>Two customers are named Luis. List both and let the user pick → that's <b>impersonation</b>. So a name <b>never</b> unlocks data, and we <b>never enumerate</b> matching accounts.</p><p class="use">Personal data releases only on a unique, exact <b>email</b> match — <code>resolve_customer_for_pii()</code>, in the tool layer, not the prompt.</p></div>
-          <div class="card"><span class="badge a">Consent, once</span><p>The first time an email is used, <code>HumanInTheLoop</code> interrupts for approve/reject. Approve once → later lookups for that email don't re-prompt (the <code>when</code> predicate scans history).</p></div>
-        </div>
-        <div class="stack">
-          <div class="card"><span class="badge v">Defense in depth</span><p><code>PIIMiddleware</code> redacts emails the bot would echo in <b>replies</b> — but <b>not input</b> (<code>apply_to_input=False</code>).</p></div>
-          <div class="card" style="border-color:#5a3a34; background:#1e1512"><div class="role" style="color:var(--red)">The trap</div><p style="color:var(--ink-soft)">Email is the <b>identifier</b>. Redact it on input and the tool sees <code>[REDACTED]</code> — no account ever matches, the whole gate breaks. So <b>input off, output on</b>.</p></div>
-        </div>
-      </div>
-      <div class="sayit"><span class="l">Say it</span><i>"A prompt can be talked around; a code gate can't. Identity lives in the tool layer — and consent is a real graph interrupt, not a prompt trick."</i></div>
-    </div>
-  </section>
-
-  <!-- 8 · RELIABILITY / MIDDLEWARE -->
-  <section class="slide" data-section="The build">
-    <div class="inner">
-      <div class="eyebrow">Reliability engineering · via middleware</div>
-      <h2>Two custom guards. Five built-ins. Each a production concern.</h2>
-      <div class="cols c3">
-        <div class="card"><div class="role amber" style="font-family:var(--mono)">custom</div><h3>Profanity + Topic guards</h3><p>Short-circuit off-topic / abusive input <b>before the LLM</b> — zero cost. Prompt "stay in scope" is the real backstop.</p></div>
-        <div class="card"><div class="role">built-in</div><h3>ModelCallLimit</h3><p><code>run_limit=8</code> — a runaway tool loop can't burn cost or hang.</p></div>
-        <div class="card"><div class="role">built-in</div><h3>Summarization</h3><p>Condenses history past a token budget. Long chats won't blow the window.</p></div>
-        <div class="card"><div class="role">built-in</div><h3>PII redaction</h3><p>Emails masked in replies only — privacy without breaking lookups.</p></div>
-        <div class="card"><div class="role">built-in</div><h3>ModelRetry</h3><p>Retry + backoff, friendly message on hard failure. Blips don't crash the chat.</p></div>
-        <div class="card"><div class="role">built-in</div><h3>HumanInTheLoop</h3><p>The consent gate — a real interrupt/resume before personal-data tools.</p></div>
-      </div>
-      <div class="sayit"><span class="l">Say it</span><i>"You told me your agent wasn't production-reliable. This is the difference — I kept two small custom guardrails and used built-in middleware for everything else. Reliability is composition, not a rewrite."</i></div>
-    </div>
-  </section>
-
-  <!-- 9 · LANGSMITH -->
-  <section class="slide" data-section="Live demo">
-    <div class="inner">
-      <div class="eyebrow">The centerpiece · why LangSmith, and in what order</div>
-      <h2>See it → Debug it → Trust it → Operate it.</h2>
-      <div class="cols" style="grid-template-columns:1.05fr .95fr; align-items:start">
-        <div class="wf" aria-label="Example trace waterfall">
-          <div class="row"><span class="rk">chain</span><div class="track"><div class="bar chain" style="left:0;right:0">support_bot · 2.4s</div></div></div>
-          <div class="row"><span class="rk">prompt</span><div class="track"><div class="bar prompt" style="left:4%;width:16%">system_prompt</div></div></div>
-          <div class="row"><span class="rk">llm</span><div class="track"><div class="bar llm" style="left:20%;width:26%">model · tool_calls</div></div></div>
-          <div class="row"><span class="rk">tool</span><div class="track"><div class="bar tool" style="left:46%;width:34%">purchase_history · tag:pii</div></div></div>
-          <div class="row"><span class="rk">retriever</span><div class="track"><div class="bar retriever" style="left:50%;width:16%">chinook_query</div></div></div>
-          <div class="row"><span class="rk">parser</span><div class="track"><div class="bar parser" style="left:66%;width:12%">format_history</div></div></div>
-          <div class="row"><span class="rk">llm</span><div class="track"><div class="bar llm" style="left:80%;width:18%">final answer</div></div></div>
-          <div class="rtlegend">
-            <span><i style="background:var(--rt-prompt)"></i>prompt</span>
-            <span><i style="background:var(--rt-retriever)"></i>retriever</span>
-            <span><i style="background:var(--rt-parser)"></i>parser</span>
-            <span><i style="background:var(--rt-tool)"></i>tool</span>
-            <span><i style="background:var(--rt-llm)"></i>llm</span>
+    <!-- 5 · ARCHITECTURE -->
+    <section class="slide" data-sec="The build">
+      <div class="head"><div class="eyebrow">The cognitive architecture</div>
+        <h2>A prebuilt agent, wrapped in guardrails.</h2></div>
+      <div class="body">
+        <div class="grid" style="grid-template-columns:1.15fr .85fr; gap:40px; margin-top:30px">
+          <div class="pipe">
+            <div class="pnode guard"><span class="pk">Profanity → Topic guards</span><span class="pd">before_model · short-circuit, no LLM cost</span></div>
+            <div class="parrow">↓</div>
+            <div class="pnode"><span class="pk">dynamic system prompt</span><span class="pd">rendered fresh each turn</span></div>
+            <div class="parrow">↓</div>
+            <div class="pnode"><span class="pk">CallLimit · Summarize · PII · Retry</span><span class="pd">built-in middleware</span></div>
+            <div class="parrow">↓</div>
+            <div class="pnode core"><span class="pk">create_agent ⇄ 9 tools</span><span class="pd">ReAct: think → act → observe · Chinook</span></div>
+            <div class="parrow">↓</div>
+            <div class="pnode guard"><span class="pk">HumanInTheLoop</span><span class="pd">consent interrupt before personal data</span></div>
+          </div>
+          <div class="whys">
+            <div class="why"><div class="wk">Why ReAct</div><div class="wd">The job is "pick the right tool and answer." A prebuilt loop fits — <b>no bespoke graph</b>.</div></div>
+            <div class="why"><div class="wk">Why middleware</div><div class="wd">Limits, retry, PII, guards, consent are <b>cross-cutting</b> — kept out of tool logic.</div></div>
+            <div class="why"><div class="wk">Why a checkpointer</div><div class="wd">Multi-turn state lives in LangGraph; the client stays thin.</div></div>
           </div>
         </div>
-        <ul class="clean">
-          <li><b>See it.</b> One real turn → the trace tree: every hop with inputs, outputs, latency, tokens — and <b>honest run types</b>, not one generic <code>chain</code>.</li>
-          <li><b>Debug it.</b> Pull up a bad run, find the wrong hop — a tool arg, a guard branch — instead of guessing. <span class="dim">This is the gap you fell into.</span></li>
-          <li><b>Trust it.</b> Turn real traces into a <b>dataset</b>; run evals (LLM-judge, exact-match) to catch regressions <b>before</b> shipping.</li>
-          <li class="a"><b>Operate it.</b> Latency, cost, error rate, feedback over time. Filter tool runs by <code>tag:pii</code> for an audit view.</li>
+      </div>
+    </section>
+
+    <!-- 6 · DEMO FLOW -->
+    <section class="slide" data-sec="Live demo">
+      <div class="head"><div class="eyebrow">Live · a realistic support flow</div>
+        <h2>Five turns that tell the whole story.</h2></div>
+      <div class="body top">
+        <div class="flow">
+          <div class="step"><span class="num">1</span><div><span class="say">"Do you have Nirvana? Which albums?"</span><span class="sub">Open catalog — no identity needed.</span></div></div>
+          <div class="step"><span class="num">2</span><div><span class="say">"What albums did I buy?" <span class="arrow">→ bot asks for the account email</span></span><span class="sub">Identity gate: a name is not enough.</span></div></div>
+          <div class="step"><span class="num">3</span><div><span class="say">"kara.nielsen@jubii.dk" <span class="arrow">→ consent card → approve → history</span></span><span class="sub">HITL consent interrupt, then the real data.</span></div></div>
+          <div class="step"><span class="num">4</span><div><span class="say">"Based on my orders, my preferred style?"</span><span class="sub">Recommendation runs — no second consent (once per email / thread).</span></div></div>
+          <div class="step"><span class="num">5</span><div><span class="say">"Write me a Python script." <span class="arrow">→ politely declines</span></span><span class="sub">Scope guardrail — stays a music-store bot.</span></div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 7 · DATA ISOLATION -->
+    <section class="slide" data-sec="Trust &amp; safety">
+      <div class="head"><div class="eyebrow">Named in the brief · "a customer sees only their own info"</div>
+        <h2>Identity is <span class="hl">email-only</span>, enforced in code.</h2></div>
+      <div class="body">
+        <div class="panels">
+          <div class="panel">
+            <div class="card"><span class="kbadge">The two-"Luis" problem</span><p>Two customers are named Luis. List both and let the user pick → <b>impersonation</b>. So a name <b>never</b> unlocks data, and we <b>never enumerate</b> accounts — release only on a unique, exact email match, in the <span class="use">tool layer, not the prompt.</span></p></div>
+            <div class="card"><span class="kbadge amb">Consent, once</span><p>First use of an email → <code>HumanInTheLoop</code> interrupts for approve/reject. Approve once → later lookups for that email <span class="use">don't re-prompt.</span></p></div>
+          </div>
+          <div class="panel">
+            <div class="card"><span class="kbadge">Defense in depth</span><p><code>PIIMiddleware</code> redacts emails the bot would echo in <b>replies</b> — but <b>not input</b>.</p></div>
+            <div class="card" style="border-color:var(--signal)"><span class="kbadge amb">The trap</span><p>Email is the <b>identifier</b>. Redact it on input and the tool sees <code>[REDACTED]</code> — no account matches, the gate breaks. So <span class="use">input off, output on.</span></p></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 8 · RELIABILITY -->
+    <section class="slide" data-sec="The build">
+      <div class="head"><div class="eyebrow">Reliability engineering · via middleware</div>
+        <h2>Two guardrails. Five built-ins. Each a production concern.</h2></div>
+      <div class="body">
+        <div class="mlist">
+          <div class="mi amb"><div class="k">Profanity + Topic guards <span class="tagm">custom ×2</span></div><div class="d">Short-circuit abusive / off-topic input <b>before the LLM</b> — zero cost.</div></div>
+          <div class="mi"><div class="k">ModelCallLimit <span class="tagm">built-in</span></div><div class="d">A runaway tool loop can't burn cost or hang.</div></div>
+          <div class="mi"><div class="k">Summarization <span class="tagm">built-in</span></div><div class="d">Condenses history past a token budget — long chats stay in-window.</div></div>
+          <div class="mi"><div class="k">PII redaction <span class="tagm">built-in</span></div><div class="d">Emails masked in replies only — privacy without breaking lookups.</div></div>
+          <div class="mi"><div class="k">ModelRetry <span class="tagm">built-in</span></div><div class="d">Retry + backoff, friendly message on failure — blips don't crash.</div></div>
+          <div class="mi"><div class="k">HumanInTheLoop <span class="tagm">built-in</span></div><div class="d">A real interrupt/resume consent gate before personal-data tools.</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 9 · LANGSMITH (signature) -->
+    <section class="slide" data-sec="Live demo">
+      <div class="head"><div class="eyebrow">The centerpiece · why LangSmith, and in what order</div>
+        <h2>See it → Debug it → Trust it → Operate it.</h2></div>
+      <div class="body">
+        <div class="grid" style="grid-template-columns:1.05fr .95fr; gap:40px; margin-top:26px; align-items:center">
+          <div class="wf" aria-label="Example trace waterfall">
+            <div class="wr"><span class="wk">chain</span><div class="track"><div class="bar chain" style="left:0;right:0">support_bot · 2.4s</div></div></div>
+            <div class="wr"><span class="wk">prompt</span><div class="track"><div class="bar prompt" style="left:4%;width:17%">system_prompt</div></div></div>
+            <div class="wr"><span class="wk">llm</span><div class="track"><div class="bar llm" style="left:21%;width:25%">model · tool_calls</div></div></div>
+            <div class="wr"><span class="wk">tool</span><div class="track"><div class="bar tool" style="left:46%;width:34%">purchase_history · pii</div></div></div>
+            <div class="wr"><span class="wk">retriever</span><div class="track"><div class="bar retriever" style="left:50%;width:15%">chinook_query</div></div></div>
+            <div class="wr"><span class="wk">parser</span><div class="track"><div class="bar parser" style="left:65%;width:13%">format_history</div></div></div>
+            <div class="wr"><span class="wk">llm</span><div class="track"><div class="bar llm" style="left:80%;width:18%">final answer</div></div></div>
+            <div class="legend">
+              <span><i style="background:var(--rt-prompt)"></i>prompt</span>
+              <span><i style="background:var(--rt-retriever)"></i>retriever</span>
+              <span><i style="background:var(--rt-parser)"></i>parser</span>
+              <span><i style="background:var(--rt-tool)"></i>tool</span>
+              <span><i style="background:var(--rt-llm)"></i>llm</span>
+            </div>
+          </div>
+          <ul class="bullets" style="margin-top:0; gap:17px">
+            <li><span class="lead">See it.</span> The trace tree — every hop with I/O, latency, tokens, and honest run types.</li>
+            <li><span class="lead">Debug it.</span> Open a bad run, find the wrong hop instead of guessing.</li>
+            <li><span class="lead">Trust it.</span> Traces → datasets → evals that catch regressions before shipping.</li>
+            <li class="sig"><span class="lead">Operate it.</span> Cost, latency, feedback — and filter tool runs by <code>tag:pii</code>.</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+    <!-- 10 · BUSINESS VALUE -->
+    <section class="slide" data-sec="Why it matters">
+      <div class="head"><div class="eyebrow">For the business stakeholders in the room</div>
+        <h2>Every technical choice → money, risk, or speed.</h2></div>
+      <div class="body">
+        <div class="vtable">
+          <div class="vrow hd"><div>Capability</div><div>Why the business cares</div></div>
+          <div class="vrow"><div class="f">Tracing + Studio</div><div class="v">Debug in minutes, not days → faster iteration, lower maintenance.</div></div>
+          <div class="vrow"><div class="f">Evaluations</div><div class="v">Ship changes with confidence; catch regressions before customers do.</div></div>
+          <div class="vrow"><div class="f">Identity gate + consent</div><div class="v">Privacy &amp; compliance; no data leaks between customers.</div></div>
+          <div class="vrow"><div class="f">Middleware (limits + retry)</div><div class="v">Cost control + uptime — the reliability you couldn't get before.</div></div>
+          <div class="vrow"><div class="f">Per-tool trace tags</div><div class="v">An audit trail: filter every personal-data access by <code>tag:pii</code>.</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 11 · FRICTION -->
+    <section class="slide" data-sec="What was hard">
+      <div class="head"><div class="eyebrow">Friction log · honesty reads as competence</div>
+        <h2>The Lang* stack was new to me. Here's what bit.</h2></div>
+      <div class="body">
+        <div class="mlist">
+          <div class="mi amb"><div class="k">Learning the whole stack</div><div class="d">LangChain 1.x, LangGraph, middleware, run types — all new. <b>Exactly the customer's starting point.</b></div></div>
+          <div class="mi"><div class="k">PII input-masking broke lookups</div><div class="d">It erased the email before the tool ran. Fix: <b>output-only.</b></div></div>
+          <div class="mi"><div class="k">Consent asked every turn</div><div class="d">Fix: the <code>when</code> predicate scans history → <b>once per email / thread.</b></div></div>
+          <div class="mi"><div class="k">Middleware typing broke overloads</div><div class="d">Invariant state type failed <code>create_agent</code>. Fix: <b>annotate the list.</b></div></div>
+          <div class="mi"><div class="k">Chat-UI's baked localhost URL</div><div class="d">A build-time env broke on a remote host. Fix: <b>run local / rebuild.</b></div></div>
+          <div class="mi"><div class="k">Deep Agents temptation</div><div class="d">Rejected as overkill — knowing when <b>not</b> to reach for a tool is a decision too.</div></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 12 · CLOSE -->
+    <section class="slide" data-sec="Wrap">
+      <div class="head"><div class="eyebrow">Recap · and questions</div></div>
+      <div class="body">
+        <h1 style="margin-top:0">Composed for reliability.<br><span class="hl">Observed</span> for trust.</h1>
+        <ul class="bullets" style="margin-top:28px">
+          <li>LangChain builds it · LangGraph runs it · <b>LangSmith makes it trustworthy.</b></li>
+          <li>Two real workflows, guardrails + consent for safety, evals for confidence.</li>
+          <li class="sig">Deep-dive Q&amp;A ammo lives in the companion cheat sheet.</li>
         </ul>
+        <div class="tags">
+          <span class="tag"><b>Repo</b> &nbsp;app.py · support_bot.py · demo.py</span>
+          <span class="tag"><b>Cheat sheet</b> &nbsp;concepts + rapid-fire Q&amp;A</span>
+          <span class="tag"><b>Thank you</b></span>
+        </div>
       </div>
-      <div class="sayit"><span class="l">Say it · (no deployments — per the brief)</span><i>"An agent you can't see is an agent you can't fix. Trace to debug, evals to trust, monitoring to keep it healthy — that's the loop from prototype to production."</i></div>
-    </div>
-  </section>
+    </section>
 
-  <!-- 10 · BUSINESS VALUE -->
-  <section class="slide" data-section="Why it matters">
-    <div class="inner">
-      <div class="eyebrow">For the business stakeholders in the room</div>
-      <h2>Every technical choice → money, risk, or speed.</h2>
-      <div class="val">
-        <div class="h">Capability</div><div class="h">Why the business cares</div>
-        <div class="c f">Tracing + Studio</div><div class="c v">Debug in minutes, not days → faster iteration, lower maintenance cost.</div>
-        <div class="c f">Evaluations</div><div class="c v">Ship changes with confidence; catch regressions before customers do.</div>
-        <div class="c f">Email-only identity + consent</div><div class="c v">Privacy &amp; compliance; no data leaks between customers.</div>
-        <div class="c f">Middleware (limits + retry)</div><div class="c v">Cost control + uptime — the reliability you couldn't get before.</div>
-        <div class="c f">Per-tool trace tags</div><div class="c v">An audit trail: filter every personal-data access by <code>tag:pii</code>.</div>
-        <div class="c f">Two focused workflows</div><div class="c v">Real support load — discovery + orders — without scope bloat.</div>
-      </div>
+    <!-- shared footer -->
+    <div class="foot">
+      <span class="brand"><b>♪</b> Music-store support bot</span>
+      <span class="sec" id="sec">Take-home</span>
+      <span class="pg"><span id="cur">1</span> / <span id="tot">12</span></span>
     </div>
-  </section>
-
-  <!-- 11 · FRICTION LOG -->
-  <section class="slide" data-section="What was hard">
-    <div class="inner">
-      <div class="eyebrow">Friction log · honesty reads as competence</div>
-      <h2>The Lang* stack was new to me. Here's what bit.</h2>
-      <div class="fric">
-        <div class="fr"><div class="k">Learning the whole stack</div><p>LangChain 1.x, LangGraph, middleware, LangSmith run types — all new. The docs-MCP + tracing shortened the loop. <b>Exactly the customer's starting point.</b></p></div>
-        <div class="fr"><div class="k">PII input-masking broke lookups</div><p><code>PIIMiddleware</code> redacts input by default — it erased the email before the tool ran. Fix: <b>output-only</b>.</p></div>
-        <div class="fr"><div class="k">Consent asked every turn</div><p>HITL re-prompted on each PII tool. Fix: the <code>when</code> predicate scans history → <b>consent once per email per thread</b>.</p></div>
-        <div class="fr"><div class="k">Middleware typing broke overloads</div><p>Heterogeneous middleware + an invariant <code>StateT</code> made <code>create_agent</code> fail type-checking. Fix: annotate the list <b>explicitly</b>.</p></div>
-        <div class="fr"><div class="k">Chat-UI's baked localhost URL</div><p>A <code>NEXT_PUBLIC_</code> API URL is inlined at build time — "localhost:3000" broke on a remote host. Fix: run local / rebuild with the real host.</p></div>
-        <div class="fr"><div class="k">Deep Agents temptation</div><p>Evaluated <code>create_deep_agent</code>, rejected it as overkill for single-turn lookups. Knowing when <b>not</b> to reach for a tool is a decision too.</p></div>
-      </div>
-    </div>
-  </section>
-
-  <!-- 12 · CLOSE -->
-  <section class="slide cover" data-section="Wrap">
-    <div class="inner">
-      <div class="eyebrow">Recap · and questions</div>
-      <h1>Composed for reliability.<br><span class="tealtx">Observed</span> for trust.</h1>
-      <ul class="clean" style="margin-top:14px; max-width:64ch">
-        <li>LangChain builds it · LangGraph runs it · <b>LangSmith makes it trustworthy</b>.</li>
-        <li>Two real workflows, guardrails + consent for safety, evals for confidence.</li>
-        <li class="a">Deep-dive Q&amp;A ammo lives in the companion cheat sheet.</li>
-      </ul>
-      <div class="sig">
-        <span class="tag"><b>Repo</b> &nbsp;app.py · support_bot.py · demo.py</span>
-        <span class="tag"><b>Cheat sheet</b> &nbsp;concepts + rapid-fire Q&amp;A</span>
-        <span class="tag"><b>Thank you</b></span>
-      </div>
-    </div>
-  </section>
-
+  </div>
 </div>
 
-<div class="hint"><kbd>←</kbd> <kbd>→</kbd> move · <kbd>F</kbd> full-screen</div>
-
-<div class="chrome">
-  <span class="brand"><b>♪</b> Music-store support bot</span>
-  <span class="nav"><button id="prev" aria-label="Previous slide">‹</button><button id="next" aria-label="Next slide">›</button></span>
-  <span class="sec" id="sec">Take-home</span>
-  <span class="count"><span id="cur">1</span> / <span id="tot">12</span></span>
+<div class="controls">
+  <button id="theme" aria-label="Toggle light / dark">◐</button>
+  <button id="prev" aria-label="Previous slide">‹</button>
+  <button id="next" aria-label="Next slide">›</button>
 </div>
+<div class="khint"><kbd>←</kbd> <kbd>→</kbd> move · <kbd>T</kbd> theme · <kbd>F</kbd> full-screen</div>
 
 <script>
   (function(){
     "use strict";
     var slides = Array.prototype.slice.call(document.querySelectorAll('.slide'));
-    var progress = document.getElementById('progress');
-    var curEl = document.getElementById('cur'), totEl = document.getElementById('tot'), secEl = document.getElementById('sec');
+    var rail = document.getElementById('rail');
+    var cur = document.getElementById('cur'), tot = document.getElementById('tot'), sec = document.getElementById('sec');
     var i = 0;
-    totEl.textContent = slides.length;
+    tot.textContent = slides.length;
+
+    // scale the fixed stage to fill the viewport, preserving 16:9
+    function fit(){
+      var s = Math.min(window.innerWidth / 1280, window.innerHeight / 720);
+      document.documentElement.style.setProperty('--s', s);
+    }
+    window.addEventListener('resize', fit);
 
     function render(){
-      slides.forEach(function(s, k){ s.classList.toggle('active', k === i); });
-      curEl.textContent = (i + 1);
-      secEl.innerHTML = slides[i].getAttribute('data-section') || '';
-      progress.style.width = ((i + 1) / slides.length * 100) + '%';
+      slides.forEach(function(sl, k){ sl.classList.toggle('on', k === i); });
+      cur.textContent = i + 1;
+      sec.innerHTML = slides[i].getAttribute('data-sec') || '';
+      rail.style.width = ((i + 1) / slides.length * 100) + '%';
       if (location.hash !== '#' + (i + 1)) history.replaceState(null, '', '#' + (i + 1));
     }
     function go(n){ i = Math.max(0, Math.min(slides.length - 1, n)); render(); }
-    function next(){ go(i + 1); }
-    function prev(){ go(i - 1); }
 
     document.addEventListener('keydown', function(e){
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       switch (e.key){
-        case 'ArrowRight': case 'PageDown': case ' ': e.preventDefault(); next(); break;
-        case 'ArrowLeft': case 'PageUp': e.preventDefault(); prev(); break;
+        case 'ArrowRight': case 'PageDown': case ' ': e.preventDefault(); go(i + 1); break;
+        case 'ArrowLeft': case 'PageUp': e.preventDefault(); go(i - 1); break;
         case 'Home': e.preventDefault(); go(0); break;
         case 'End': e.preventDefault(); go(slides.length - 1); break;
+        case 't': case 'T': toggleTheme(); break;
         case 'f': case 'F':
           if (document.fullscreenElement) document.exitFullscreen();
           else if (document.documentElement.requestFullscreen) document.documentElement.requestFullscreen();
           break;
       }
     });
-    document.getElementById('next').addEventListener('click', next);
-    document.getElementById('prev').addEventListener('click', prev);
+    function toggleTheme(){
+      var r = document.documentElement;
+      r.setAttribute('data-theme', r.getAttribute('data-theme') === 'dark' ? 'light' : 'dark');
+    }
+    document.getElementById('next').addEventListener('click', function(){ go(i + 1); });
+    document.getElementById('prev').addEventListener('click', function(){ go(i - 1); });
+    document.getElementById('theme').addEventListener('click', toggleTheme);
 
-    var startHash = parseInt((location.hash || '').replace('#', ''), 10);
-    if (startHash >= 1 && startHash <= slides.length) i = startHash - 1;
-    render();
+    var start = parseInt((location.hash || '').replace('#', ''), 10);
+    if (start >= 1 && start <= slides.length) i = start - 1;
+    fit(); render();
   })();
 </script>
 </body>
