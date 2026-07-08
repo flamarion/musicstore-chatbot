@@ -109,7 +109,7 @@ flowchart TD
     PG -- "profanity" --> STOP(["jump_to END · canned reply"])
     PG -- "clean" --> TG{"TopicGuard · before_model<br/>keyword topic filter — no LLM cost"}
     TG -- "blatant off-topic" --> STOP
-    TG -- "on-topic / ambiguous" --> LIM
+    TG -- "not off-topic" --> LIM
 
     subgraph agentloop["create_agent — bounded ReAct loop"]
         direction TB
