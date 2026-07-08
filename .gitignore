@@ -150,6 +150,8 @@ activemq-data/
 # Environments
 .env
 .envrc
+# Host-specific llama.cpp model config for docker-compose (see llama.env.example)
+llama.env
 .venv
 env/
 venv/
@@ -219,3 +221,6 @@ __marimo__/
 
 # LangGraph dev/server local cache
 .langgraph_api/
+
+# Claude Code local settings
+.claude/

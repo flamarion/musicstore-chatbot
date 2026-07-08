@@ -11,16 +11,21 @@ from langchain.agents import create_agent
 from langchain.agents.middleware import (
     AgentMiddleware,
     AgentState,
+    HumanInTheLoopMiddleware,
+    InterruptOnConfig,
     ModelCallLimitMiddleware,
     ModelRetryMiddleware,
     PIIMiddleware,
     SummarizationMiddleware,
+    dynamic_prompt,
     hook_config,
 )
 from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
+from langsmith import traceable
 from typing_extensions import NotRequired
 
 from support_bot import (
@@ -252,7 +257,8 @@ def store_reference_tool() -> str:
     return DATABASE_CONTEXT
 
 
-SYSTEM_PROMPT = f"""Current date: {time.strftime("%Y-%m-%d %H:%M:%S %Z")}
+SYSTEM_PROMPT_TEMPLATE = ChatPromptTemplate.from_messages([
+    ("system", """Current date: {current_date}
 
 You are a friendly and helpful customer support assistant for a digital music store.
 
@@ -285,7 +291,29 @@ help with the store. Do NOT write code or scripts, even when the request seems r
 store's data — offer to look the data up for them instead.
 
 Be conversational, helpful, and concise. Always use tools when appropriate rather than making up information.
-If you are unsure which tool to use, ask the user for clarification."""
+If you are unsure which tool to use, ask the user for clarification."""),
+])
+
+
+@traceable(run_type="prompt", name="system_prompt")
+def _render_system_prompt() -> str:
+    """Format the system prompt for the current turn.
+
+    Rendering a ``ChatPromptTemplate`` per call (rather than baking an f-string
+    once at import) keeps "Current date" fresh and — as a ``run_type="prompt"``
+    traceable — surfaces a distinct **prompt** run in LangSmith.  Returns the
+    plain system text for the model request.
+    """
+    messages = SYSTEM_PROMPT_TEMPLATE.format_messages(
+        current_date=time.strftime("%Y-%m-%d %H:%M:%S %Z")
+    )
+    return str(messages[0].content)
+
+
+@dynamic_prompt
+def system_prompt_middleware(request) -> str:
+    """Supply the system prompt on every model call (LangChain dynamic-prompt hook)."""
+    return _render_system_prompt()
 
 
 def status_banner() -> str:
@@ -367,57 +395,86 @@ def _check_profanity(text: str, strikes: int) -> str | None:
 class GuardrailState(AgentState):
     """Agent state extended with the profanity-strike counter."""
 
+    # Custom state property, owned by ProfanityGuardMiddleware and persisted per
+    # thread by the checkpointer: 0 = clean, 1 = warned, 2 = banned.
     profanity_strikes: NotRequired[int]
 
 
-class GuardrailMiddleware(AgentMiddleware):
-    """Pre-model guardrail: block off-topic or profane input before it reaches the LLM.
+def _latest_human_text(state) -> str | None:
+    """Return the most recent HumanMessage content as a string, or None.
 
-    Replaces the old standalone ``guardrail_node`` + ``guardrail_router``.  As a
-    ``before_model`` hook it can short-circuit straight to the end of the agent
-    (``jump_to="end"``), so blocked messages cost no LLM or tool call.
+    Shared by both guardrail middlewares so each stays self-contained.  Coerces
+    non-string content (e.g. multimodal parts) to ``str`` so the keyword checks
+    can't blow up on unexpected message shapes.
+    """
+    last_human = next(
+        (m for m in reversed(state["messages"]) if isinstance(m, HumanMessage)),
+        None,
+    )
+    if last_human is None:
+        return None
+    text = last_human.content
+    return text if isinstance(text, str) else str(text)
+
+
+class ProfanityGuardMiddleware(AgentMiddleware):
+    """Stateful profanity easter egg: warn on the 1st swear, ban on the 2nd.
+
+    Owns the ``profanity_strikes`` counter declared on ``GuardrailState``; the
+    checkpointer persists it per thread, and demo.py carries the count across
+    ``/clear``, so a fresh thread can't wipe the ban (no dodging by clearing
+    between swears).  As a ``before_model`` hook it short-circuits with
+    ``jump_to="end"``, so a blocked message costs no LLM or tool call.  It runs
+    ahead of the topic guard so a ban trumps everything else.
     """
 
     state_schema = GuardrailState
 
     @hook_config(can_jump_to=["end"])
     def before_model(self, state, runtime):
-        last_human = next(
-            (m for m in reversed(state["messages"])
-             if isinstance(m, HumanMessage)),
-            None,
-        )
-        if last_human is None:
+        text = _latest_human_text(state)
+        if text is None:
             return None
 
-        text = last_human.content
-        if not isinstance(text, str):
-            text = str(text)
         strikes = state.get("profanity_strikes", 0)
 
-        # Already banned (2 strikes) — stay banned.  Strikes are persisted by the
-        # checkpointer per thread, and demo.py carries the count across /clear, so
-        # a fresh thread can't wipe the ban (no dodging by clearing between swears).
+        # Already banned (2 strikes) — stay banned.
         if strikes >= 2:
             return {"jump_to": "end", "messages": [AIMessage(content=_PROFANITY_BAN)]}
 
-        profanity_result = _check_profanity(text, strikes)
-        if profanity_result == "ban":
+        result = _check_profanity(text, strikes)
+        if result == "ban":
             return {
                 "jump_to": "end",
                 "messages": [AIMessage(content=_PROFANITY_BAN)],
                 "profanity_strikes": strikes + 1,
             }
-        if profanity_result == "warning":
+        if result == "warning":
             return {
                 "jump_to": "end",
                 "messages": [AIMessage(content=_PROFANITY_WARNING)],
                 "profanity_strikes": strikes + 1,
             }
+        return None
 
+
+class TopicGuardMiddleware(AgentMiddleware):
+    """Stateless topic pre-filter: short-circuit blatant off-topic input.
+
+    A cheap keyword classifier that redirects obvious non-store requests before
+    any LLM call.  Intentionally biased toward false-negatives (lets borderline
+    input through); the system prompt's "stay in scope" rule is the real
+    backstop.  Like the profanity guard, it's a ``before_model`` hook that can
+    ``jump_to="end"`` so a redirect costs nothing.
+    """
+
+    @hook_config(can_jump_to=["end"])
+    def before_model(self, state, runtime):
+        text = _latest_human_text(state)
+        if text is None:
+            return None
         if _classify_message(text) == "off-topic":
             return {"jump_to": "end", "messages": [AIMessage(content=_OFF_TOPIC_REDIRECT)]}
-
         return None
 
 
@@ -432,6 +489,59 @@ def _endpoint_down_message(exc: Exception) -> str:
     return (
         "I'm having trouble reaching my brain right now — "
         "the language model is unavailable. Please try again in a moment."
+    )
+
+
+# ---------------------------------------------------------------------------
+# Human-in-the-loop consent gate for personal data (built-in middleware)
+# ---------------------------------------------------------------------------
+# The two tools that read a customer's personal data.  Before either runs, the
+# built-in HumanInTheLoopMiddleware pauses the agent (interrupt) so the user can
+# explicitly consent to their email being used for the lookup — GDPR-style
+# "purpose consent" on top of the email-only identity gate.  The other six tools
+# (inventory, artist, genre, browse, top-sellers, reference) touch no personal
+# data and are auto-approved.
+_PII_CONSENT_TOOLS = ("purchase_history_tool", "recommendation_tool")
+
+
+def _consent_description(tool_call, state, runtime) -> str:
+    """Render the consent prompt shown to the user before a PII lookup runs.
+
+    Used as the ``description`` factory in the tool's ``InterruptOnConfig``; the
+    string is surfaced in the interrupt payload (CLI prompt or agent-chat-ui card).
+    """
+    email = (tool_call["args"].get("customer_email") or "").strip()
+    purpose = (
+        "look up your personal purchase history"
+        if tool_call["name"] == "purchase_history_tool"
+        else "build recommendations from your personal purchase history"
+    )
+    return (
+        f"🔒 Consent needed — I'd like to use the email {email} to {purpose}. "
+        "Approve to proceed, or reject to cancel."
+    )
+
+
+def _uses_an_email(request) -> bool:
+    """Only interrupt when an email is actually about to be used.
+
+    Passed as the ``when`` predicate: if the model calls a PII tool without an
+    email, there's nothing to consent to — the tool just asks for one — so we
+    skip the interrupt and let it through.
+    """
+    return bool((request.tool_call["args"].get("customer_email") or "").strip())
+
+
+def _pii_consent_middleware() -> HumanInTheLoopMiddleware:
+    """Build the consent gate: approve/reject before either PII tool executes."""
+    config = InterruptOnConfig(
+        allowed_decisions=["approve", "reject"],
+        description=_consent_description,
+        when=_uses_an_email,
+    )
+    return HumanInTheLoopMiddleware(
+        interrupt_on={name: config for name in _PII_CONSENT_TOOLS},
+        description_prefix="Personal-data access requires your consent",
     )
 
 
@@ -516,28 +626,37 @@ def build_agent(checkpointer: Any = _DEFAULT_CHECKPOINTER):
         store_reference_tool,
     ]
 
-    # The prebuilt ReAct loop (agent <-> tools) plus a middleware stack — one
-    # custom guardrail and four LangChain built-ins.  Order is outer→inner:
-    #   - GuardrailMiddleware      (custom)  : topic/profanity pre-check, before any LLM call
+    # The prebuilt ReAct loop (agent <-> tools) plus a middleware stack — two
+    # custom guardrails and four LangChain built-ins.  Order is outer→inner:
+    #   - ProfanityGuardMiddleware (custom)  : stateful 2-strike profanity gate; runs first so a
+    #                                          ban trumps everything, before any LLM call
+    #   - TopicGuardMiddleware     (custom)  : stateless off-topic keyword pre-filter
     #   - ModelCallLimitMiddleware (builtin) : cap the ReAct loop so a turn can't spin forever
     #   - SummarizationMiddleware  (builtin) : condense old history past a token budget (rarely
     #                                          fires at this window; idiomatic context management)
-    #   - PIIMiddleware            (builtin) : mask emails in the bot's REPLIES only — input is
+    #   - PIIMiddleware            (builtin) : redact emails in the bot's REPLIES only — input is
     #                                          left intact so the email-required lookups still work
     #   - ModelRetryMiddleware     (builtin) : retry with backoff, then _endpoint_down_message
+    #   - HumanInTheLoopMiddleware (builtin) : pause for user consent before a PII tool runs;
+    #                                          interrupts the graph and resumes on approve/reject
+    # The system prompt is supplied by system_prompt_middleware (dynamic_prompt) instead of the
+    # create_agent system_prompt= arg, so it renders a ChatPromptTemplate fresh each turn (keeps
+    # "Current date" current) and shows as a prompt run in traces.
     # An InMemorySaver checkpointer persists per-thread state (messages AND
-    # profanity_strikes), so callers send only the new turn and the 2-strike ban
-    # actually fires across separate messages.
+    # profanity_strikes) and the HITL interrupt, so callers send only the new turn,
+    # the 2-strike ban fires across separate messages, and a paused consent survives.
     return create_agent(
         model=llm,
         tools=tools,
-        system_prompt=SYSTEM_PROMPT,
         middleware=[
-            GuardrailMiddleware(),
+            ProfanityGuardMiddleware(),
+            TopicGuardMiddleware(),
+            system_prompt_middleware,
             ModelCallLimitMiddleware(run_limit=8, exit_behavior="end"),
             SummarizationMiddleware(model=llm, trigger=("tokens", 8000), keep=("messages", 20)),
             PIIMiddleware("email", strategy="redact", apply_to_input=False, apply_to_output=True),
             ModelRetryMiddleware(max_retries=2, on_failure=_endpoint_down_message),
+            _pii_consent_middleware(),
         ],
         checkpointer=checkpointer,
     )

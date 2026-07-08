@@ -1,0 +1,27 @@
+# Keep the build context lean and secrets out of the image.
+.git
+.gitignore
+.github
+.langgraph_api
+__pycache__
+**/__pycache__
+*.pyc
+.venv
+venv
+node_modules
+scratchpad
+
+# Secrets: env is injected at runtime via compose (env_file / environment),
+# never baked into an image layer.
+.env
+
+# Docs aren't needed at runtime — except database_context.md, which app.py reads
+# on import (store_reference_tool) and MUST ship in the image.
+*.md
+!database_context.md
+
+# Build/deploy files themselves
+Dockerfile
+Dockerfile.chat-ui
+docker-compose.yml
+.dockerignore

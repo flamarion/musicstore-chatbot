@@ -93,44 +93,79 @@ Use any of these email addresses to test customer-specific features:
 ## Architecture
 
 The agent is built with LangChain's **`create_agent`** — the prebuilt ReAct loop (agent ⇄
-tools) — plus a **middleware stack** (one custom guardrail + four LangChain built-ins) and a
-LangGraph **`InMemorySaver` checkpointer** that owns conversation state. A message first passes
-the **guardrail** (`before_model`) that can short-circuit off-topic/profane input; on-topic
-input reaches the LLM, and if it asks for a tool the loop runs it against the Chinook DB and
-comes back until a final answer is produced. LangSmith traces every hop.
+tools) — plus a **middleware stack** (two custom guardrails, a dynamic system prompt, and five
+LangChain built-ins) and a LangGraph **`InMemorySaver` checkpointer** that owns conversation
+state. A message first passes the two **guardrails** (`before_model` hooks) that can short-circuit
+profane or off-topic input; on-topic input reaches the LLM, and if it asks for a personal-data
+tool the **consent gate** interrupts for approval before the tool runs against the Chinook DB, and
+the loop comes back until a final answer is produced. LangSmith traces every hop — with `prompt`,
+`retriever`, `parser`, `tool`, and `llm` run types (not just `chain`).
 
 ```mermaid
 flowchart TD
-    U([User message + thread_id]) --> G["GuardrailMiddleware.before_model<br/>(keyword topic + profanity)"]
-    G -->|off-topic / profanity| Eg([jump_to END — redirect or playful ban])
-    G -->|on-topic| L["ModelCallLimit → Summarization<br/>PII mask → ModelRetry"]
-    L --> A["agent (create_agent)<br/>LLM + 8 tools"]
-    A -->|tool_calls| T["tools<br/>(execute against Chinook DB)"]
-    T --> A
-    A -->|final answer| Ef([END — reply to user])
-    CP[("InMemorySaver<br/>checkpointer")] -. persists history + strikes .- A
+    U(["User turn — message + thread_id"]) --> CPR[("InMemorySaver<br/>restores thread state")]
+    CPR --> PG{"ProfanityGuard · before_model<br/>1st swear warns · 2nd bans"}
+
+    PG -- "profanity" --> STOP(["jump_to END · canned reply"])
+    PG -- "clean" --> TG{"TopicGuard · before_model<br/>keyword topic filter — no LLM cost"}
+    TG -- "blatant off-topic" --> STOP
+    TG -- "on-topic / ambiguous" --> LIM
+
+    subgraph agentloop["create_agent — bounded ReAct loop"]
+        direction TB
+        LIM["ModelCallLimit + Summarization<br/>cap the loop · condense old history"] --> M{"LLM call<br/>(ModelRetry wraps it)"}
+        M -- "tool_calls" --> HITL{"HumanInTheLoop<br/>personal-data tool?"}
+        HITL -- "catalog tool / approved" --> T["8 tools → Chinook SQLite"]
+        T -- "results" --> M
+    end
+
+    HITL -. "interrupt: consent to use email" .-> CONSENT(["User approves / rejects"])
+    CONSENT -. "resume" .-> HITL
+
+    M -- "final answer" --> PII["PIIMiddleware<br/>redacts emails in the reply"]
+    PII --> R(["Reply to user"])
+    STOP --> CPW[("InMemorySaver<br/>persists messages + strikes")]
+    R --> CPW
+
+    LS[["LangSmith — traces guardrails, model, consent & every tool"]]
+    LS -.-> PG
+    LS -.-> M
+
+    classDef io fill:#e8eefc,stroke:#5b76b8,color:#0b1220;
+    classDef stop fill:#fce4ec,stroke:#c2557a,color:#0b1220;
+    class U,R,CONSENT io;
+    class STOP stop;
 ```
+
+The two `InMemorySaver` nodes are the **same** checkpointer at both ends of the turn: it
+restores prior state on the way in and persists the updated `messages` + `profanity_strikes` on
+the way out. The guardrail short-circuit (`STOP`) still writes state, so a strike sticks even when
+no LLM ran.
 
 ### Components
 
 | Layer | Responsibility |
 |---|---|
 | **Agent** (`app.py`) | `create_agent(model, tools, system_prompt, middleware=[…], checkpointer=…)` — the prebuilt agent ⇄ tools ReAct loop; no hand-rolled `StateGraph` |
-| **GuardrailMiddleware** (custom) | `before_model` hook: keyword topic classifier + 2-strike profanity easter egg; `jump_to="end"` before any LLM/tool call |
+| **ProfanityGuardMiddleware** (custom) | `before_model` hook: stateful 2-strike profanity easter egg (owns `profanity_strikes`); runs first so a ban trumps everything; `jump_to="end"` before any LLM/tool call |
+| **TopicGuardMiddleware** (custom) | `before_model` hook: stateless keyword topic classifier; `jump_to="end"` on blatant off-topic input, before any LLM/tool call |
+| **system_prompt** (`dynamic_prompt`) | Renders a `ChatPromptTemplate` **each turn** (keeps "Current date" fresh) and supplies it as the model's system prompt; traced as a `prompt` run |
 | **ModelCallLimitMiddleware** (built-in) | Caps the ReAct loop (`run_limit=8`, graceful `exit_behavior="end"`) so a turn can't spin forever |
 | **SummarizationMiddleware** (built-in) | Condenses old history past a token budget (`trigger=("tokens", 8000)`, keeps recent 20) — idiomatic context management; rarely fires at this window |
-| **PIIMiddleware** (built-in) | Masks `email` in the bot's **replies** (`apply_to_output`); **input is left intact** (`apply_to_input=False`) so email-required lookups still work |
+| **PIIMiddleware** (built-in) | Redacts `email` in the bot's **replies** (`strategy="redact"`, `apply_to_output`); **input is left intact** (`apply_to_input=False`) so email-required lookups still work |
 | **ModelRetryMiddleware** (built-in) | Retries the model call with backoff; on final failure returns a friendly "endpoint down" message (replaces the old hand-rolled fallback) |
+| **HumanInTheLoopMiddleware** (built-in) | **Consent gate**: interrupts the graph for approve/reject before either personal-data tool (`purchase_history_tool`, `recommendation_tool`) runs — but only when an email is actually present (`when` predicate); catalog tools auto-approve. Needs a checkpointer to persist the pause |
 | **Checkpointer** (`InMemorySaver`) | Persists per-thread state (message history **and** `profanity_strikes`) in-process, keyed by `thread_id`; callers send only the new turn |
-| **LangChain tools** (`support_bot.py`) | Eight `@tool` functions: purchase history, recommendations, inventory, artist lookup, genre catalog, genre browse, top sellers, store reference — each backed by Chinook SQL |
+| **LangChain tools** (`support_bot.py`) | Eight `@tool` functions: purchase history, recommendations, inventory, artist lookup, genre catalog, genre browse, top sellers, store reference — each backed by Chinook SQL routed through one `@traceable(run_type="retriever")` helper |
 | **LLM** | Hosted **Claude** (`ChatAnthropic`) or any local OpenAI-compatible endpoint (`ChatOpenAI` → llama.cpp/Ollama), selected by `LLM_PROVIDER` / auto-detected from `ANTHROPIC_API_KEY` |
-| **LangSmith** | Tracing/observability of the agent's decisions and tool calls (enabled by its own env vars) |
+| **LangSmith** | Tracing/observability with proper run types — `prompt` (system prompt), `retriever` (DB lookups), `parser` (response shaping), `tool`, `llm` — enabled by its own env vars |
 | **Chinook DB** | SQLite catalog (customers, invoices, tracks, genres); auto-downloaded on first run |
 
 ### Request lifecycle
 
-1. **Guardrail** — `GuardrailMiddleware.before_model` classifies the latest message. Off-topic
-   or profane input is answered with a canned reply and `jump_to="end"` — no LLM cost. Because
+1. **Guardrails** — two `before_model` hooks screen the latest message. `ProfanityGuardMiddleware`
+   runs first (a ban must trump everything); if the input is clean, `TopicGuardMiddleware` checks
+   topic. Either can answer with a canned reply and `jump_to="end"` — no LLM cost. Because
    `profanity_strikes` is persisted by the checkpointer, the 2nd strike bans the thread and the
    ban sticks across later messages until it's reset.
 2. **Loop & context guards** — `ModelCallLimitMiddleware` bounds the ReAct loop; `Summarization‑
@@ -140,8 +175,13 @@ flowchart TD
    executes them against the Chinook DB and returns until the LLM produces a plain answer.
    `ModelRetryMiddleware` wraps this call so a transient endpoint blip retries, and a hard
    failure yields a friendly message instead of a crash.
-4. **PII & reply** — `PIIMiddleware` masks any email the model would echo back (input is never
-   touched, so lookups keep working). LangSmith records each hop and tool call.
+4. **Consent gate** — before a personal-data tool runs with an email,
+   `HumanInTheLoopMiddleware` **interrupts** the graph so the user can approve or reject using
+   their email for the lookup. Approve → the tool runs; reject → it's skipped and the model is
+   told so. Catalog tools (and email-less calls) pass straight through. The interrupt is
+   persisted by the checkpointer, so the pause survives across the resume request.
+5. **PII & reply** — `PIIMiddleware` redacts any email the model would echo back (input is never
+   touched, so lookups keep working). LangSmith records each hop, consent decision, and tool call.
 
 ### Conversation state
 
@@ -217,6 +257,45 @@ Notes:
 - `langgraph dev` (and lightweight self-host) is free with a LangSmith key; a full production
   `langgraph up` self-host may require a LangGraph Platform license.
 
+### Full stack with a chat UI (Docker Compose)
+
+For a one-command deployment — **local model + agent server + a web chat UI** — the repo ships a
+[docker-compose.yml](docker-compose.yml) that stands up four things on one Docker network:
+
+| Service | Image / build | Port | Role |
+|---|---|---|---|
+| `llama` | `ghcr.io/ggml-org/llama.cpp:server-cuda` | `8033` | the local model on your GPUs (OpenAI-compatible) |
+| `langgraph-api` | built from [Dockerfile](Dockerfile) (`app.py:make_graph`) | `8123` | the support-bot agent as a streaming REST API |
+| `langgraph-postgres` / `langgraph-redis` | `pgvector/pgvector:pg16` · `redis:7` | — | persistent threads + interrupts for the server |
+| `agent-chat-ui` | built from [Dockerfile.chat-ui](Dockerfile.chat-ui) ([langchain-ai/agent-chat-ui](https://github.com/langchain-ai/agent-chat-ui)) | `3000` | a web chat that renders the agent **and its consent interrupts** |
+
+```bash
+# 1. Model config for llama.cpp (points at your GGUF under ~/models)
+cp llama.env.example llama.env && $EDITOR llama.env
+
+# 2. .env must have LANGSMITH_API_KEY set — the self-hosted LangGraph server
+#    needs it for its license (it also drives tracing).
+grep -q LANGSMITH_API_KEY .env || echo "LANGSMITH_API_KEY=lsv2_..." >> .env
+
+# 3. Build + run the whole stack (UID/GID keep model files owned by you)
+UID=$(id -u) GID=$(id -g) docker compose up --build
+```
+
+Then open **<http://localhost:3000>**, point the UI at graph `support_bot`, and chat. Asking for a
+personal lookup (e.g. *"my purchase history for luisrojas@yahoo.cl"*) surfaces an **approve/reject
+consent card** — the `HumanInTheLoopMiddleware` interrupt — before any data is read.
+
+How it fits together:
+
+- **Networking** — every service shares the `ai` network (external name `ai-stack`), so the agent
+  reaches the model by service name at `http://llama:8033/v1` (the compose overrides `LLM_ENDPOINT`
+  for the container; your `.env` value only affects the local CLI).
+- **Chat UI in proxy mode** — the browser only talks to the UI's own same-origin `/api`, which
+  forwards server-side to `http://langgraph-api:8000`. No CORS to configure, and the LangSmith key
+  never reaches the client. `NEXT_PUBLIC_*` config is baked at image build time (Next.js).
+- **GPU** — the `llama` service pins host-specific GPU UUIDs; replace them with yours from
+  `nvidia-smi -L`. `llama.env` (git-ignored) holds the model path and server flags.
+
 ## Configuration
 
 ### Choosing the model backend
@@ -269,9 +348,17 @@ LANGSMITH_PROJECT=musicstore-chatbot   # optional; this is the default
 ```
 
 Each turn appears as a named `musicstore-support` trace (tagged `musicstore-demo`) whose tree
-shows the whole run: the **guardrail** decision, the **model** call, and every **tool**
-invocation with its inputs/outputs and latency. It's the clearest way to see _why_ the agent
-asked for an email, or which tool answered a catalog question. The startup banner reports
+shows the whole run, and every hop carries its **proper run type** rather than a generic `chain`:
+
+- `prompt` — the `system_prompt` render (a `ChatPromptTemplate` formatted per turn via the
+  `dynamic_prompt` middleware, so "Current date" is always current)
+- `retriever` — each DB lookup, routed through one `@traceable(run_type="retriever")` helper
+  (`chinook_query`), so store data access reads as retrieval
+- `parser` — response shaping (e.g. `format_purchase_history` grouping rows into the reply)
+- `tool` — the eight `@tool` functions · `llm` — the model call
+
+It's the clearest way to see _why_ the agent asked for an email, which tool answered a catalog
+question, or that consent was requested before a lookup. The startup banner reports
 `LangSmith: on/off` (read straight from `LANGSMITH_TRACING`).
 
 ## Project Files

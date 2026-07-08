@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 import requests
+from langsmith import traceable
 
 CHINOOK_SQL_URL = "https://raw.githubusercontent.com/lerocha/chinook-database/master/ChinookDatabase/DataSources/Chinook_Sqlite.sql"
 DEFAULT_DB_PATH = Path(__file__).resolve().parent / "chinook.db"
@@ -30,6 +31,25 @@ def ensure_chinook_database(db_path: Optional[Path] = None) -> Path:
     return db_path
 
 
+@traceable(run_type="retriever", name="chinook_query")
+def _retrieve(sql: str, params: tuple = (), db_path: Optional[Path] = None) -> list[dict]:
+    """Run a read query against Chinook and return the rows as dicts.
+
+    Every tool's data access goes through here, so in LangSmith each lookup shows
+    up as a distinct **retriever** run nested under its tool call — the store DB
+    is the bot's retrieval source.  Centralizing the connection also means one
+    place opens and (always) closes it.
+    """
+    db_path = ensure_chinook_database(db_path)
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute(sql, params).fetchall()
+    finally:
+        conn.close()
+    return [dict(row) for row in rows]
+
+
 def _lookup_customer_by_exact_email(email: str, db_path: Optional[Path] = None) -> tuple[int, list[dict]]:
     """Look up a customer by an exact (case-insensitive) email match.
 
@@ -38,41 +58,12 @@ def _lookup_customer_by_exact_email(email: str, db_path: Optional[Path] = None) 
     search it will not match on partial/substring input, so a caller cannot
     fish for another customer's account with a fragment.
     """
-    db_path = ensure_chinook_database(db_path)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-
-    rows = conn.execute(
+    customers = _retrieve(
         "SELECT CustomerId, FirstName, LastName, Email, City, Country "
         "FROM Customer WHERE lower(Email) = ?",
         (email.strip().lower(),),
-    ).fetchall()
-    conn.close()
-
-    customers = [dict(row) for row in rows]
-    return len(customers), customers
-
-
-def _lookup_customer_by_name(customer_name: str, db_path: Optional[Path] = None) -> tuple[int, list[dict]]:
-    """Look up customers by name.  Returns (count, list_of_customer_dicts).
-
-    May return multiple matches when customers share a name (e.g. two "Luis"
-    accounts).  Used only to *detect* existence/ambiguity — never to release
-    personal data, which requires a verified email (see
-    :func:`resolve_customer_for_pii`).
-    """
-    db_path = ensure_chinook_database(db_path)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-
-    rows = conn.execute(
-        "SELECT CustomerId, FirstName, LastName, Email, City, Country "
-        "FROM Customer WHERE lower(FirstName || ' ' || LastName) LIKE ?",
-        (f"%{customer_name.lower()}%",),
-    ).fetchall()
-    conn.close()
-
-    customers = [dict(row) for row in rows]
+        db_path,
+    )
     return len(customers), customers
 
 
@@ -129,10 +120,7 @@ def get_customer_purchase_history(
     if error:
         return error
 
-    db_path = ensure_chinook_database(db_path)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
+    rows = _retrieve(
         """
         SELECT c.FirstName || ' ' || c.LastName AS customer_name,
                i.InvoiceId, i.InvoiceDate, i.Total,
@@ -150,13 +138,22 @@ def get_customer_purchase_history(
         ORDER BY i.InvoiceDate DESC, il.InvoiceLineId
         """,
         (cid, cid),
-    ).fetchall()
-    conn.close()
+        db_path,
+    )
 
     if not rows:
         return "That account has no purchase history in our store yet."
 
-    # Group the line items under their invoice, preserving newest-first order.
+    return _format_purchase_history(rows)
+
+
+@traceable(run_type="parser", name="format_purchase_history")
+def _format_purchase_history(rows: list[dict]) -> str:
+    """Turn the flat invoice-line rows into the itemized, newest-first reply.
+
+    Traced as a **parser** run: it's the step that shapes raw retrieved rows into
+    the customer-facing text (grouping line items under their invoice).
+    """
     name = rows[0]["customer_name"]
     invoices: dict = {}
     for r in rows:
@@ -193,10 +190,7 @@ def recommend_music_for_customer(
     if error:
         return error
 
-    db_path = ensure_chinook_database(db_path)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
+    rows = _retrieve(
         """
         SELECT c.FirstName || ' ' || c.LastName AS customer_name,
                g.Name AS genre_name,
@@ -212,8 +206,8 @@ def recommend_music_for_customer(
         LIMIT 5
         """,
         (cid,),
-    ).fetchall()
-    conn.close()
+        db_path,
+    )
 
     if not rows:
         return "That account has no listening history yet to recommend from."
@@ -226,18 +220,16 @@ def recommend_music_for_customer(
 
 
 def get_inventory_snapshot(db_path: Optional[Path] = None) -> str:
-    db_path = ensure_chinook_database(db_path)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-
-    query = """
+    row = _retrieve(
+        """
         SELECT
             (SELECT COUNT(*) FROM Track) AS track_count,
             (SELECT COUNT(*) FROM Album) AS album_count,
             (SELECT COUNT(*) FROM Artist) AS artist_count
-    """
-    row = conn.execute(query).fetchone()
-    conn.close()
+        """,
+        (),
+        db_path,
+    )[0]
 
     return (
         f"The store currently has {row['track_count']} tracks across {row['album_count']} albums "
@@ -246,16 +238,11 @@ def get_inventory_snapshot(db_path: Optional[Path] = None) -> str:
 
 
 def find_artists_by_keyword(keyword: str, db_path: Optional[Path] = None) -> str:
-    db_path = ensure_chinook_database(db_path)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-
-    search_term = f"%{keyword.lower()}%"
-    rows = conn.execute(
+    rows = _retrieve(
         "SELECT Name FROM Artist WHERE lower(Name) LIKE ? ORDER BY Name LIMIT 10",
-        (search_term,),
-    ).fetchall()
-    conn.close()
+        (f"%{keyword.lower()}%",),
+        db_path,
+    )
 
     if rows:
         artists = ", ".join(row["Name"] for row in rows)
@@ -271,11 +258,7 @@ def find_artists_by_keyword(keyword: str, db_path: Optional[Path] = None) -> str
 
 
 def get_most_common_genres(limit: int = 5, db_path: Optional[Path] = None) -> str:
-    db_path = ensure_chinook_database(db_path)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-
-    rows = conn.execute(
+    rows = _retrieve(
         """
         SELECT g.Name AS genre_name, COUNT(*) AS track_count
         FROM Track t
@@ -285,8 +268,8 @@ def get_most_common_genres(limit: int = 5, db_path: Optional[Path] = None) -> st
         LIMIT ?
         """,
         (limit,),
-    ).fetchall()
-    conn.close()
+        db_path,
+    )
 
     if not rows:
         return "No genre data is available in the catalog."
@@ -306,10 +289,7 @@ def browse_albums_by_genre(genre: str, db_path: Optional[Path] = None) -> str:
     if not genre:
         return "Which genre would you like to browse? For example: Rock, Jazz, or Alternative & Punk."
 
-    db_path = ensure_chinook_database(db_path)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
-    rows = conn.execute(
+    rows = _retrieve(
         """
         SELECT al.Title AS album,
                ar.Name AS artist,
@@ -325,8 +305,8 @@ def browse_albums_by_genre(genre: str, db_path: Optional[Path] = None) -> str:
         LIMIT 10
         """,
         (f"%{genre.lower()}%",),
-    ).fetchall()
-    conn.close()
+        db_path,
+    )
 
     if not rows:
         return (
@@ -351,17 +331,14 @@ def top_selling_albums(genre: str = "", db_path: Optional[Path] = None) -> str:
     fuzzy-matched, so "punk" resolves to "Alternative & Punk".
     """
     genre = (genre or "").strip()
-    db_path = ensure_chinook_database(db_path)
-    conn = sqlite3.connect(db_path)
-    conn.row_factory = sqlite3.Row
 
     where = ""
-    params: list = []
+    params: tuple = ()
     if genre:
         where = "WHERE lower(g.Name) LIKE ?"
-        params.append(f"%{genre.lower()}%")
+        params = (f"%{genre.lower()}%",)
 
-    rows = conn.execute(
+    rows = _retrieve(
         f"""
         SELECT al.Title AS album,
                ar.Name AS artist,
@@ -377,8 +354,8 @@ def top_selling_albums(genre: str = "", db_path: Optional[Path] = None) -> str:
         LIMIT 5
         """,
         params,
-    ).fetchall()
-    conn.close()
+        db_path,
+    )
 
     scope = f" in '{genre}'" if genre else ""
     if not rows:
@@ -388,49 +365,3 @@ def top_selling_albums(genre: str = "", db_path: Optional[Path] = None) -> str:
         f"- {row['album']} — {row['artist']} ({row['units_sold']} sold)" for row in rows
     )
     return f"Best-selling albums{scope}:\n{listed}"
-
-
-# Common trailing filler words that should not be part of a customer name
-_FILLER_WORDS = frozenset({
-    "please", "thanks", "thank", "thankyou", "thank-you", "pls",
-    "help", "can", "could", "would", "should", "is", "are", "was",
-    "were", "do", "did", "has", "have", "had", "show", "get", "look",
-    "i", "my", "me", "for", "the", "a", "an",
-})
-
-
-def _extract_customer_name(user_message: str) -> str:
-    """Extract a customer name from a user message.
-
-    Strips trailing punctuation and filler words, then returns the last
-    meaningful word as the candidate name.  This is a keyword-router
-    fallback — the LLM-facing path in ``app.py`` is the source of truth.
-    """
-    # Strip trailing punctuation
-    cleaned = user_message.strip().rstrip(".,!?;:")
-    words = cleaned.split()
-    # Pop trailing filler words
-    while words and words[-1].lower() in _FILLER_WORDS:
-        words.pop()
-    # Return the last remaining word, stripped
-    return words[-1].strip() if words else ""
-
-
-def build_support_response(user_message: str, db_path: Optional[Path] = None) -> str:
-    lowered = user_message.lower()
-    if "recommend" in lowered or "music" in lowered or "song" in lowered:
-        customer_name = _extract_customer_name(user_message)
-        if not customer_name:
-            return "I'd need a customer name to look up recommendations. Could you provide one?"
-        return recommend_music_for_customer(customer_name=customer_name, db_path=db_path)
-
-    if "purchase" in lowered or "invoice" in lowered or "receipt" in lowered or "order" in lowered:
-        customer_name = _extract_customer_name(user_message)
-        if not customer_name:
-            return "I'd need a customer name to look up purchase history. Could you provide one?"
-        return get_customer_purchase_history(customer_name=customer_name, db_path=db_path)
-
-    return (
-        "I can help with music recommendations and purchase history. "
-        "Try asking: 'Recommend music for Luis' or 'Show my invoice history for Luis'."
-    )

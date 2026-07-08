@@ -1,0 +1,143 @@
+# Self-contained deployment: local llama.cpp model + the LangGraph agent server
+# (Postgres + Redis for persistence) + LangChain's agent-chat-ui — all on one
+# network so the browser can chat with the support bot end-to-end.
+#
+# Bring it up on the GPU host:
+#     UID=$(id -u) GID=$(id -g) docker compose up --build
+# then open http://localhost:3000
+#
+# Requires: an NVIDIA GPU host with the container toolkit, a ./llama.env for the
+# model, ~/models holding the GGUF, and LANGSMITH_API_KEY set in ./.env (the
+# self-hosted LangGraph server needs it for its license, and it also drives tracing).
+name: musicstore-chatbot
+
+volumes:
+  langgraph-postgres-data:
+    driver: local
+
+networks:
+  ai:
+    name: ai-stack
+    driver: bridge
+
+services:
+  # ---- Local model: llama.cpp server on the GPUs (OpenAI-compatible API) -------
+  llama:
+    image: ghcr.io/ggml-org/llama.cpp:server-cuda
+    restart: unless-stopped
+    # Run as the host user so files written under /models stay owned by you.
+    user: "${UID:-1000}:${GID:-1000}"
+    env_file:
+      - ./llama.env
+    ports:
+      - "8033:8033"
+    volumes:
+      - ${HOME}/models:/models
+    networks:
+      - ai
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              # Host-specific GPU UUIDs — replace with your own (`nvidia-smi -L`).
+              device_ids:
+                - "GPU-aadc3ce2-e583-e796-6128-b044ec01fb4c"
+                - "GPU-addff0a1-bc13-627a-4a7f-a28477adab3d"
+                - "GPU-c6cd2bbc-be17-ad9d-5907-86f679115e30"
+                - "GPU-c997c55f-243e-527f-372a-752a6622fc98"
+              capabilities: [gpu]
+
+  # ---- Persistence for the LangGraph server -----------------------------------
+  langgraph-redis:
+    image: redis:7
+    restart: unless-stopped
+    networks:
+      - ai
+    healthcheck:
+      test: redis-cli ping
+      interval: 5s
+      timeout: 1s
+      retries: 5
+
+  langgraph-postgres:
+    image: pgvector/pgvector:pg16
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    command: ["postgres", "-c", "shared_preload_libraries=vector"]
+    volumes:
+      - langgraph-postgres-data:/var/lib/postgresql/data
+    networks:
+      - ai
+    healthcheck:
+      test: pg_isready -U postgres
+      start_period: 10s
+      timeout: 1s
+      retries: 5
+      interval: 20s
+      start_interval: 1s
+
+  # ---- The support-bot agent, served as a streaming REST API ------------------
+  # Built from the generated Dockerfile (langgraph.json -> app.py:make_graph,
+  # which omits a checkpointer so the platform's Postgres/Redis own persistence).
+  langgraph-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8123:8000"
+    depends_on:
+      langgraph-redis:
+        condition: service_healthy
+      langgraph-postgres:
+        condition: service_healthy
+      llama:
+        condition: service_started
+    environment:
+      # Persistence injected by the platform (make_graph has no local checkpointer).
+      REDIS_URI: redis://langgraph-redis:6379
+      POSTGRES_URI: postgres://postgres:postgres@langgraph-postgres:5432/postgres?sslmode=disable
+      # Reach llama.cpp by service name on the shared network (overrides .env's host IP).
+      LLM_PROVIDER: local
+      LLM_ENDPOINT: http://llama:8033/v1
+    env_file:
+      # LANGSMITH_API_KEY (server license + tracing), LANGSMITH_* , LLM_MODEL,
+      # LLM_TEMPERATURE, MAX_OUTPUT_TOKENS, ...  (LLM_ENDPOINT above wins over any here.)
+      - .env
+    networks:
+      - ai
+    healthcheck:
+      test: python /api/healthcheck.py
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+      start_interval: 2s
+
+  # ---- LangChain agent-chat-ui ------------------------------------------------
+  # Proxy mode: the browser only talks to this app's same-origin /api route, which
+  # forwards server-side to the agent inside the network — no CORS, key stays off
+  # the client.
+  agent-chat-ui:
+    build:
+      context: .
+      dockerfile: Dockerfile.chat-ui
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:3000/api
+        NEXT_PUBLIC_ASSISTANT_ID: support_bot
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    depends_on:
+      langgraph-api:
+        condition: service_healthy
+    environment:
+      # Server-side only: where the /api proxy forwards to, and the key it uses.
+      LANGGRAPH_API_URL: http://langgraph-api:8000
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+    networks:
+      - ai
