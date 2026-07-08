@@ -20,7 +20,7 @@ from langchain.agents.middleware import (
     dynamic_prompt,
     hook_config,
 )
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
@@ -459,12 +459,14 @@ def _endpoint_down_message(exc: Exception) -> str:
 # ---------------------------------------------------------------------------
 # Human-in-the-loop consent gate for personal data (built-in middleware)
 # ---------------------------------------------------------------------------
-# The two tools that read a customer's personal data.  Before either runs, the
-# built-in HumanInTheLoopMiddleware pauses the agent (interrupt) so the user can
-# explicitly consent to their email being used for the lookup — GDPR-style
-# "purpose consent" on top of the email-only identity gate.  The other six tools
-# (inventory, artist, genre, browse, top-sellers, reference) touch no personal
-# data and are auto-approved.
+# The two tools that read a customer's personal data.  The first time an email is
+# used for one of them, the built-in HumanInTheLoopMiddleware pauses the agent
+# (interrupt) so the user can explicitly consent to that email being used —
+# GDPR-style "purpose consent" on top of the email-only identity gate.  Consent is
+# remembered per email per thread (see _consent_required), so an approved lookup
+# isn't re-prompted on every later turn.  The other seven tools (inventory, artist,
+# albums-by-artist, genre, browse, top-sellers, reference) touch no personal data
+# and are auto-approved.
 # Per-tool consent purpose, keyed by tool name so it stays in sync with the set.
 _PII_CONSENT_PURPOSE = {
     "purchase_history_tool": "look up your personal purchase history",
@@ -487,22 +489,60 @@ def _consent_description(tool_call, state, runtime) -> str:
     )
 
 
-def _uses_an_email(request) -> bool:
-    """Only interrupt when an email is actually about to be used.
+def _email_already_consented(state, email: str) -> bool:
+    """True if *email* was already approved for a PII tool earlier in this thread.
 
-    Passed as the ``when`` predicate: if the model calls a PII tool without an
-    email, there's nothing to consent to — the tool just asks for one — so we
-    skip the interrupt and let it through.
+    A personal-data tool only executes once the user approves its consent
+    interrupt; a rejection instead yields a ``status="error"`` ToolMessage and no
+    execution.  So a prior *successful* ToolMessage from a PII tool, whose
+    originating call used this same email, is proof consent was already granted —
+    we don't need to ask again.  (Matched on the email so switching to a different
+    address still re-prompts.)
     """
-    return bool((request.tool_call["args"].get("customer_email") or "").strip())
+    messages = state.get("messages", [])
+    # tool_call_id -> email used, for every PII tool call the model has made.
+    call_email = {
+        tc["id"]: (tc["args"].get("customer_email") or "").strip().lower()
+        for m in messages
+        for tc in (getattr(m, "tool_calls", None) or [])
+        if tc["name"] in _PII_CONSENT_TOOLS
+    }
+    return any(
+        isinstance(m, ToolMessage)
+        and m.name in _PII_CONSENT_TOOLS
+        and getattr(m, "status", "success") != "error"
+        and call_email.get(m.tool_call_id) == email
+        for m in messages
+    )
+
+
+def _consent_required(request) -> bool:
+    """`when` predicate: interrupt for consent only the FIRST time an email is used.
+
+    Two gates: (a) the call must actually carry an email — without one there's
+    nothing to consent to (the tool just asks for it), so let it through; and
+    (b) that email must not already have been approved for a personal-data tool
+    earlier in this thread.  Net effect: the user is asked to consent ONCE per
+    email per conversation — once they approve, later PII lookups for the same
+    email run without re-prompting.
+    """
+    email = (request.tool_call["args"].get("customer_email") or "").strip().lower()
+    if not email:
+        return False
+    return not _email_already_consented(request.state, email)
 
 
 def _pii_consent_middleware() -> HumanInTheLoopMiddleware:
-    """Build the consent gate: approve/reject before either PII tool executes."""
+    """Build the consent gate: approve/reject before either PII tool executes.
+
+    The ``when`` predicate asks for consent only once per email per thread (see
+    :func:`_consent_required`), so an approved lookup isn't re-prompted turn after
+    turn.
+    """
     config = InterruptOnConfig(
         allowed_decisions=["approve", "reject"],
         description=_consent_description,
-        when=_uses_an_email,
+        when=_consent_required,
     )
     return HumanInTheLoopMiddleware(
         interrupt_on={name: config for name in _PII_CONSENT_TOOLS},

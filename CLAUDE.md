@@ -20,7 +20,7 @@ Built with LangChain `create_agent` (prebuilt ReAct loop, agent ⇄ tools) + a m
 - `SummarizationMiddleware` (built-in) — condenses history past `("tokens", 8000)`, keeps recent 20; idiomatic context mgmt (rarely fires).
 - `PIIMiddleware("email", strategy="redact", apply_to_input=False, apply_to_output=True)` (built-in) — redacts emails in **replies only**; input stays intact so lookups work. **Do not enable `apply_to_input`** — it would redact the email before tools see it and break the identity gate.
 - `ModelRetryMiddleware(on_failure=_endpoint_down_message)` (built-in) — retry with backoff, then friendly message (replaced the old custom `EndpointFallbackMiddleware`).
-- `HumanInTheLoopMiddleware` (built-in, `_pii_consent_middleware()`) — **consent gate**: interrupts before `purchase_history_tool` / `recommendation_tool` for approve/reject, but only when an email is present (`when` predicate); catalog tools auto-approve. Needs the checkpointer to persist the pause; resume with `Command(resume={"decisions":[{"type":"approve"|"reject"}]})`.
+- `HumanInTheLoopMiddleware` (built-in, `_pii_consent_middleware()`) — **consent gate**: interrupts before `purchase_history_tool` / `recommendation_tool` for approve/reject the **first time** an email is used. The `when` predicate (`_consent_required`) skips email-less calls and any email already approved earlier in the thread (scans history for a successful PII ToolMessage), so consent is asked **once per email per thread**, not every turn; catalog tools auto-approve. Needs the checkpointer to persist the pause; resume with `Command(resume={"decisions":[{"type":"approve"|"reject"}]})`.
 - `InMemorySaver` checkpointer — persists per-`thread_id` state (`messages` + `profanity_strikes`) **and** the HITL interrupt; callers send only the new turn.
 - 9 tools (8 lookups + `store_reference_tool`) run against the Chinook SQLite DB via one `@traceable(run_type="retriever")` `_retrieve()` helper (retriever runs); the richest formatter is `@traceable(run_type="parser")`. Catalog lookups include `albums_by_artist_tool` (albums for a named artist), `browse_genre_tool` and `top_sellers_tool`. Each tool object carries a category tag (`catalog`/`account`/`reference`) + `reads_pii` metadata (derived from the HITL consent set) so its `tool` run is filterable/groupable in LangSmith without drilling into traces.
 - Model backend is **hosted Claude or a local endpoint**, chosen by `resolve_provider()` (`LLM_PROVIDER` / auto-detect from `ANTHROPIC_API_KEY`).
@@ -101,6 +101,9 @@ TRACE_ENABLED=1 python demo.py   # middleware logging (redacts PII by default)
   `result["__interrupt__"][0].value` (an `HITLRequest`), asks y/N, and resumes with
   `Command(resume={"decisions":[{"type":"approve"|"reject"}]})`. `agent-chat-ui` renders the same
   interrupt as an approve/reject card. Requires a checkpointer (both CLI and served paths have one).
+  Consent is **remembered per email per thread**: `_consent_required` scans history for a prior
+  successful PII ToolMessage with the same email and skips the interrupt if found — so an approved
+  email isn't re-prompted every turn, but a rejection or a different email re-asks.
 - **Trace run types are deliberate.** DB access is `@traceable(run_type="retriever")` (`_retrieve`),
   response shaping is `run_type="parser"`, and the system prompt is `run_type="prompt"` (rendered
   from a `ChatPromptTemplate` via `@dynamic_prompt`). Keep run types honest — don't tag a

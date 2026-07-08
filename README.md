@@ -154,7 +154,7 @@ no LLM ran.
 | **SummarizationMiddleware** (built-in) | Condenses old history past a token budget (`trigger=("tokens", 8000)`, keeps recent 20) — idiomatic context management; rarely fires at this window |
 | **PIIMiddleware** (built-in) | Redacts `email` in the bot's **replies** (`strategy="redact"`, `apply_to_output`); **input is left intact** (`apply_to_input=False`) so email-required lookups still work |
 | **ModelRetryMiddleware** (built-in) | Retries the model call with backoff; on final failure returns a friendly "endpoint down" message (replaces the old hand-rolled fallback) |
-| **HumanInTheLoopMiddleware** (built-in) | **Consent gate**: interrupts the graph for approve/reject before either personal-data tool (`purchase_history_tool`, `recommendation_tool`) runs — but only when an email is actually present (`when` predicate); catalog tools auto-approve. Needs a checkpointer to persist the pause |
+| **HumanInTheLoopMiddleware** (built-in) | **Consent gate**: interrupts the graph for approve/reject the **first time** an email is used for a personal-data tool (`purchase_history_tool`, `recommendation_tool`) — the `when` predicate skips email-less calls and any email already approved earlier in the thread, so consent is asked once per email; catalog tools auto-approve. Needs a checkpointer to persist the pause |
 | **Checkpointer** (`InMemorySaver`) | Persists per-thread state (message history **and** `profanity_strikes`) in-process, keyed by `thread_id`; callers send only the new turn |
 | **LangChain tools** (`support_bot.py`) | Nine `@tool` functions: purchase history, recommendations, inventory, artist lookup, albums by artist, genre catalog, genre browse, top sellers, store reference — each backed by Chinook SQL routed through one `@traceable(run_type="retriever")` helper. Each tool carries a category tag (`catalog`/`account`/`reference`) + `reads_pii` metadata so its `tool` run is filterable in LangSmith |
 | **LLM** | Hosted **Claude** (`ChatAnthropic`) or any local OpenAI-compatible endpoint (`ChatOpenAI` → llama.cpp/Ollama), selected by `LLM_PROVIDER` / auto-detected from `ANTHROPIC_API_KEY` |
@@ -175,11 +175,12 @@ no LLM ran.
    executes them against the Chinook DB and returns until the LLM produces a plain answer.
    `ModelRetryMiddleware` wraps this call so a transient endpoint blip retries, and a hard
    failure yields a friendly message instead of a crash.
-4. **Consent gate** — before a personal-data tool runs with an email,
+4. **Consent gate** — the **first time** an email is used for a personal-data tool,
    `HumanInTheLoopMiddleware` **interrupts** the graph so the user can approve or reject using
    their email for the lookup. Approve → the tool runs; reject → it's skipped and the model is
-   told so. Catalog tools (and email-less calls) pass straight through. The interrupt is
-   persisted by the checkpointer, so the pause survives across the resume request.
+   told so. Consent is remembered per email per thread (the `when` predicate scans history), so an
+   approved email isn't re-prompted on later turns. Catalog tools (and email-less calls) pass
+   straight through. The interrupt is persisted by the checkpointer, so the pause survives the resume.
 5. **PII & reply** — `PIIMiddleware` redacts any email the model would echo back (input is never
    touched, so lookups keep working). LangSmith records each hop, consent decision, and tool call.
 
