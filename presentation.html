@@ -69,8 +69,8 @@
   code{font-family:var(--mono); font-size:.82em; color:var(--accent-ink); background:var(--accent-wash);
        padding:2px 7px; border-radius:6px; white-space:nowrap}
   .head{flex:0 0 auto}
-  .body{flex:1 1 auto; display:flex; flex-direction:column; justify-content:center; min-height:0}
-  .body.top{justify-content:flex-start; padding-top:34px}
+  .body{flex:1 1 auto; display:flex; flex-direction:column; justify-content:flex-start; padding-top:24px; min-height:0}
+  .body.top{padding-top:16px}
 
   /* tags (cover) ------------------------------------------------- */
   .tags{display:flex; flex-wrap:wrap; gap:10px; margin-top:34px}
@@ -79,9 +79,9 @@
   .tag b{color:var(--accent-ink); font-weight:600}
 
   /* bullets ------------------------------------------------------ */
-  .bullets{list-style:none; margin:30px 0 0; padding:0; display:flex; flex-direction:column; gap:20px; max-width:56ch}
-  .bullets li{display:grid; grid-template-columns:26px 1fr; gap:16px; font-size:26px; line-height:1.38; color:var(--ink-2)}
-  .bullets li::before{content:""; width:11px; height:11px; margin-top:11px; border-radius:3px; background:var(--accent)}
+  .bullets{list-style:none; margin:26px 0 0; padding:0; display:flex; flex-direction:column; gap:20px; max-width:58ch}
+  .bullets li{position:relative; padding-left:32px; font-size:26px; line-height:1.4; color:var(--ink-2)}
+  .bullets li::before{content:""; position:absolute; left:0; top:.55em; width:11px; height:11px; border-radius:3px; background:var(--accent)}
   .bullets li.sig::before{background:var(--signal)}
   .bullets li b{color:var(--ink)}
   .bullets li .lead{color:var(--ink); font-weight:680}
@@ -133,9 +133,9 @@
   .why .wd b{color:var(--ink)}
 
   /* numbered prompts (a real sequence) --------------------------- */
-  .flow{display:flex; flex-direction:column; gap:14px; margin-top:30px}
+  .flow{display:flex; flex-direction:column; gap:12px; margin-top:18px}
   .step{display:grid; grid-template-columns:44px 1fr; gap:18px; align-items:center;
-        background:var(--panel); border:1px solid var(--line); border-radius:13px; padding:16px 20px; box-shadow:var(--shadow)}
+        background:var(--panel); border:1px solid var(--line); border-radius:13px; padding:14px 20px; box-shadow:var(--shadow)}
   .step .num{font-family:var(--mono); font-size:19px; font-weight:700; color:#fff; background:var(--accent);
              width:38px; height:38px; border-radius:9px; display:grid; place-items:center}
   .step .say{font-size:22px; font-weight:640; color:var(--ink)}
@@ -171,20 +171,18 @@
   .panel{display:flex; flex-direction:column; gap:16px}
 
   /* footer + controls ------------------------------------------- */
-  .foot{position:absolute; left:76px; right:76px; bottom:30px; display:flex; align-items:center; gap:16px;
+  .foot{position:absolute; left:76px; right:76px; bottom:26px; display:flex; align-items:center; gap:18px;
         font-family:var(--mono); font-size:14px; color:var(--muted); border-top:1px solid var(--line); padding-top:14px}
   .foot .brand{color:var(--ink-2)} .foot .brand b{color:var(--accent-ink); font-weight:600}
+  .foot .khint{color:var(--faint); font-size:12.5px}
+  .foot .khint kbd{border:1px solid var(--line); border-radius:4px; padding:0 5px; color:var(--muted)}
   .foot .sec{margin-left:auto; letter-spacing:.09em; text-transform:uppercase}
-  .foot .pg{color:var(--ink); font-variant-numeric:tabular-nums; min-width:56px; text-align:right}
-
-  .controls{position:fixed; bottom:20px; right:22px; z-index:20; display:flex; gap:8px}
-  .controls button{font-family:var(--mono); font-size:16px; color:var(--ink-2); background:var(--panel);
-                   border:1px solid var(--line); border-radius:9px; width:38px; height:34px; cursor:pointer;
-                   line-height:1; box-shadow:var(--shadow)}
-  .controls button:hover{border-color:var(--accent); color:var(--accent-ink)}
-  .controls button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
-  .khint{position:fixed; bottom:26px; left:22px; z-index:20; font-family:var(--mono); font-size:13px; color:var(--faint)}
-  .khint kbd{border:1px solid var(--line); border-radius:5px; padding:1px 6px; color:var(--muted)}
+  .foot .pg{color:var(--ink); font-variant-numeric:tabular-nums}
+  .foot .fnav{display:flex; gap:7px}
+  .foot .fnav button{font-family:var(--mono); font-size:15px; color:var(--ink-2); background:var(--panel);
+                     border:1px solid var(--line); border-radius:8px; width:32px; height:29px; cursor:pointer; line-height:1}
+  .foot .fnav button:hover{border-color:var(--accent); color:var(--accent-ink)}
+  .foot .fnav button:focus-visible{outline:2px solid var(--accent); outline-offset:2px}
 </style>
 </head>
 <body>
@@ -407,18 +405,17 @@
     <!-- shared footer -->
     <div class="foot">
       <span class="brand"><b>♪</b> Music-store support bot</span>
+      <span class="khint"><kbd>←</kbd> <kbd>→</kbd> move · <kbd>T</kbd> theme · <kbd>F</kbd> full-screen</span>
       <span class="sec" id="sec">Take-home</span>
       <span class="pg"><span id="cur">1</span> / <span id="tot">12</span></span>
+      <span class="fnav">
+        <button id="theme" aria-label="Toggle light / dark">◐</button>
+        <button id="prev" aria-label="Previous slide">‹</button>
+        <button id="next" aria-label="Next slide">›</button>
+      </span>
     </div>
   </div>
 </div>
-
-<div class="controls">
-  <button id="theme" aria-label="Toggle light / dark">◐</button>
-  <button id="prev" aria-label="Previous slide">‹</button>
-  <button id="next" aria-label="Next slide">›</button>
-</div>
-<div class="khint"><kbd>←</kbd> <kbd>→</kbd> move · <kbd>T</kbd> theme · <kbd>F</kbd> full-screen</div>
 
 <script>
   (function(){
