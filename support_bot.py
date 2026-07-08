@@ -50,7 +50,7 @@ def _retrieve(sql: str, params: tuple = (), db_path: Optional[Path] = None) -> l
     return [dict(row) for row in rows]
 
 
-def _lookup_customer_by_exact_email(email: str, db_path: Optional[Path] = None) -> tuple[int, list[dict]]:
+def _lookup_customer_by_exact_email(email: str, db_path: Optional[Path] = None) -> list[dict]:
     """Look up a customer by an exact (case-insensitive) email match.
 
     Email is guaranteed unique in the Customer table, so this returns at most
@@ -58,13 +58,12 @@ def _lookup_customer_by_exact_email(email: str, db_path: Optional[Path] = None) 
     search it will not match on partial/substring input, so a caller cannot
     fish for another customer's account with a fragment.
     """
-    customers = _retrieve(
+    return _retrieve(
         "SELECT CustomerId, FirstName, LastName, Email, City, Country "
         "FROM Customer WHERE lower(Email) = ?",
         (email.strip().lower(),),
         db_path,
     )
-    return len(customers), customers
 
 
 # Shown when we decline to release personal data without a verified email.
@@ -94,8 +93,8 @@ def resolve_customer_for_pii(
         # A name may have been supplied, but a name is not proof of identity.
         return None, _EMAIL_REQUIRED
 
-    count, customers = _lookup_customer_by_exact_email(email, db_path)
-    if count == 0:
+    customers = _lookup_customer_by_exact_email(email, db_path)
+    if not customers:
         return None, (
             f"I don't see an account under {email}. Could you double-check the "
             "email address on the account?"

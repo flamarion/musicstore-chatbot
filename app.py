@@ -177,34 +177,6 @@ def top_sellers_tool(genre: str = "") -> str:
 # ---------------------------------------------------------------------------
 # Topic guardrails — lightweight keyword pre-filter (MVP, no LLM call)
 # ---------------------------------------------------------------------------
-# On-topic keywords/phrases that indicate a valid music-store question.
-# If NONE of these appear in the user's message (case-insensitive), it's
-# flagged as off-topic.  This is intentionally broad to avoid false
-# positives — a bare customer name like "Luis" is valid because it
-# implies a purchase-history or recommendation lookup.
-_ON_TOPIC_KEYWORDS = frozenset([
-    # General store intent
-    "music", "song", "album", "artist", "genre", "band", "track", "playlist",
-    "catalog", "inventory", "stock", "purchase", "buy", "order", "invoice",
-    "history", "recommend", "suggest", "browse", "search", "look", "find",
-    "show", "what", "who", "where", "when", "how", "which",
-    # Store-specific
-    "download", "digital", "store", "music store", "playlist", "mp3",
-    "media", "sound", "rock", "pop", "jazz", "blues", "classical",
-    "hip hop", "hip-hop", "r&b", "rnb", "country", "electronic",
-    "electro", "metal", "punk", "reggae", "folk", "soul", "funk",
-    "disco", "indie", "alternative", "ambient", "techno", "house",
-    "trance", "dubstep", "grunge", "screamo", "emo", "new wave",
-    "synth", "synthpop", "lo-fi", "acoustic", "orchestral",
-    # Customer actions
-    "my", "my purchase", "my order", "my invoice", "my history",
-    "for", "help me", "can you", "could you", "i want", "i'd like",
-    "i need", "do you have", "do you sell",
-    # Customer name lookup (bare names are valid — implies history/recommendation)
-    "luis", "john", "emma", "david", "sarah", "mike", "jennifer",
-    "roberto", "frank", "jason",
-])
-
 # Off-topic keywords — if ANY of these appear, the message is flagged.
 # Carefully curated to catch obvious non-store requests without
 # over-matching on borderline queries.
@@ -226,14 +198,6 @@ _OFF_TOPIC_KEYWORDS = frozenset([
     # Prompt injection / jailbreak patterns
     "ignore all instructions", "ignore previous", "do not follow",
     "you are now", "from now on", "system override",
-])
-
-# Messages that are off-topic but short enough to be ambiguous —
-# these are NOT blocked (e.g. "hi", "hello", "thanks" are valid greetings).
-_SHORT_ALLOWLIST = frozenset([
-    "hi", "hello", "hey", "hola", "thanks", "thank you", "bye",
-    "goodbye", "good morning", "good afternoon", "good evening",
-    "help", "ok", "okay", "yes", "no", "sure", "please",
 ])
 
 _OFF_TOPIC_REDIRECT = (
@@ -352,32 +316,16 @@ _PROFANITY_BAN = (
 )
 
 
-def _classify_message(text: str) -> str:
-    """Classify a message as 'on-topic', 'off-topic', or 'ambiguous'.
+def _is_off_topic(text: str) -> bool:
+    """Return True only for blatant off-topic input.
 
-    Returns one of:
-      - 'on-topic'    → proceed to agent
-      - 'off-topic'   → short-circuit with redirect
-      - 'ambiguous'   → treat as on-topic (false positives are worse)
+    A deliberately narrow keyword pre-filter: it blocks a message if any
+    off-topic keyword appears, and lets everything else through.  Anything
+    borderline is treated as on-topic (false positives are worse than false
+    negatives); the system prompt's "stay in scope" rule is the real backstop.
     """
     lower = text.lower()
-
-    # Short messages that are always allowed (greetings, etc.)
-    if lower.strip() in _SHORT_ALLOWLIST:
-        return "on-topic"
-
-    # Hard off-topic blockers
-    for kw in _OFF_TOPIC_KEYWORDS:
-        if kw in lower:
-            return "off-topic"
-
-    # On-topic signals
-    for kw in _ON_TOPIC_KEYWORDS:
-        if kw in lower:
-            return "on-topic"
-
-    # Ambiguous — default to on-topic
-    return "on-topic"
+    return any(kw in lower for kw in _OFF_TOPIC_KEYWORDS)
 
 
 def _check_profanity(text: str, strikes: int) -> str | None:
@@ -473,7 +421,7 @@ class TopicGuardMiddleware(AgentMiddleware):
         text = _latest_human_text(state)
         if text is None:
             return None
-        if _classify_message(text) == "off-topic":
+        if _is_off_topic(text):
             return {"jump_to": "end", "messages": [AIMessage(content=_OFF_TOPIC_REDIRECT)]}
         return None
 
@@ -501,7 +449,12 @@ def _endpoint_down_message(exc: Exception) -> str:
 # "purpose consent" on top of the email-only identity gate.  The other six tools
 # (inventory, artist, genre, browse, top-sellers, reference) touch no personal
 # data and are auto-approved.
-_PII_CONSENT_TOOLS = ("purchase_history_tool", "recommendation_tool")
+# Per-tool consent purpose, keyed by tool name so it stays in sync with the set.
+_PII_CONSENT_PURPOSE = {
+    "purchase_history_tool": "look up your personal purchase history",
+    "recommendation_tool": "build recommendations from your personal purchase history",
+}
+_PII_CONSENT_TOOLS = tuple(_PII_CONSENT_PURPOSE)
 
 
 def _consent_description(tool_call, state, runtime) -> str:
@@ -511,11 +464,7 @@ def _consent_description(tool_call, state, runtime) -> str:
     string is surfaced in the interrupt payload (CLI prompt or agent-chat-ui card).
     """
     email = (tool_call["args"].get("customer_email") or "").strip()
-    purpose = (
-        "look up your personal purchase history"
-        if tool_call["name"] == "purchase_history_tool"
-        else "build recommendations from your personal purchase history"
-    )
+    purpose = _PII_CONSENT_PURPOSE[tool_call["name"]]
     return (
         f"🔒 Consent needed — I'd like to use the email {email} to {purpose}. "
         "Approve to proceed, or reject to cancel."
