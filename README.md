@@ -386,6 +386,7 @@ question, or that consent was requested before a lookup. The startup banner repo
 
 ## Resources
 
+- **Demo slide deck** — self-contained web deck for the presentation (open in a browser; `←`/`→` to navigate): [presentation.html](presentation.html)
 - **Interview / demo cheat sheet** — LangChain · LangGraph · Deep Agents · LangSmith, mapped to this repo: <https://claude.ai/code/artifact/e2ade25e-77f2-4c94-b32b-d9f98ba4427e>
 - **Task brief** — Deployed Engineer Technical Task (LangChain & LangSmith Demo): <https://mirror-feeling-d80.notion.site/Deployed-Engineer-Technical-Task-LangChain-and-LangSmith-Demo-2fc808527b178012904dc568d97616d2>
 - **LangChain built-in middleware** — <https://docs.langchain.com/oss/python/langchain/middleware/built-in>
