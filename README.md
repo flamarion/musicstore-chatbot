@@ -115,7 +115,7 @@ flowchart TD
         direction TB
         LIM["ModelCallLimit + Summarization<br/>cap the loop · condense old history"] --> M{"LLM call<br/>(ModelRetry wraps it)"}
         M -- "tool_calls" --> HITL{"HumanInTheLoop<br/>personal-data tool?"}
-        HITL -- "catalog tool / approved" --> T["8 tools → Chinook SQLite"]
+        HITL -- "catalog tool / approved" --> T["9 tools → Chinook SQLite"]
         T -- "results" --> M
     end
 
@@ -156,7 +156,7 @@ no LLM ran.
 | **ModelRetryMiddleware** (built-in) | Retries the model call with backoff; on final failure returns a friendly "endpoint down" message (replaces the old hand-rolled fallback) |
 | **HumanInTheLoopMiddleware** (built-in) | **Consent gate**: interrupts the graph for approve/reject before either personal-data tool (`purchase_history_tool`, `recommendation_tool`) runs — but only when an email is actually present (`when` predicate); catalog tools auto-approve. Needs a checkpointer to persist the pause |
 | **Checkpointer** (`InMemorySaver`) | Persists per-thread state (message history **and** `profanity_strikes`) in-process, keyed by `thread_id`; callers send only the new turn |
-| **LangChain tools** (`support_bot.py`) | Eight `@tool` functions: purchase history, recommendations, inventory, artist lookup, genre catalog, genre browse, top sellers, store reference — each backed by Chinook SQL routed through one `@traceable(run_type="retriever")` helper |
+| **LangChain tools** (`support_bot.py`) | Nine `@tool` functions: purchase history, recommendations, inventory, artist lookup, albums by artist, genre catalog, genre browse, top sellers, store reference — each backed by Chinook SQL routed through one `@traceable(run_type="retriever")` helper. Each tool carries a category tag (`catalog`/`account`/`reference`) + `reads_pii` metadata so its `tool` run is filterable in LangSmith |
 | **LLM** | Hosted **Claude** (`ChatAnthropic`) or any local OpenAI-compatible endpoint (`ChatOpenAI` → llama.cpp/Ollama), selected by `LLM_PROVIDER` / auto-detected from `ANTHROPIC_API_KEY` |
 | **LangSmith** | Tracing/observability with proper run types — `prompt` (system prompt), `retriever` (DB lookups), `parser` (response shaping), `tool`, `llm` — enabled by its own env vars |
 | **Chinook DB** | SQLite catalog (customers, invoices, tracks, genres); auto-downloaded on first run |
@@ -355,7 +355,8 @@ shows the whole run, and every hop carries its **proper run type** rather than a
 - `retriever` — each DB lookup, routed through one `@traceable(run_type="retriever")` helper
   (`chinook_query`), so store data access reads as retrieval
 - `parser` — response shaping (e.g. `format_purchase_history` grouping rows into the reply)
-- `tool` — the eight `@tool` functions · `llm` — the model call
+- `tool` — the nine `@tool` functions, each tagged by category (`catalog`/`account`/`reference`)
+  with `reads_pii` metadata, so the Runs view filters by tag without drilling into traces · `llm` — the model call
 
 It's the clearest way to see _why_ the agent asked for an email, which tool answered a catalog
 question, or that consent was requested before a lookup. The startup banner reports
@@ -365,7 +366,7 @@ question, or that consent was requested before a lookup. The startup banner repo
 
 | File | Purpose |
 |---|---|
-| [app.py](app.py) | `create_agent` agent + guardrail/fallback middleware, `InMemorySaver` checkpointer, 8 tools, model-backend selection, system prompt |
+| [app.py](app.py) | `create_agent` agent + guardrail/fallback middleware, `InMemorySaver` checkpointer, 9 tools (+ per-tool LangSmith trace tags), model-backend selection, system prompt |
 | [support_bot.py](support_bot.py) | Chinook database queries and the tool implementations, email-only identity gate |
 | [demo.py](demo.py) | Sample and interactive demo runners; per-thread conversation via the checkpointer |
 | [database_context.md](database_context.md) | Schema and data insights, served on demand via `store_reference_tool` (not baked into every prompt) |

@@ -323,6 +323,59 @@ def browse_albums_by_genre(genre: str, db_path: Optional[Path] = None) -> str:
     )
 
 
+def get_albums_by_artist(artist: str, db_path: Optional[Path] = None) -> str:
+    """List the albums a given artist has in the catalog.
+
+    The artist name is fuzzy-matched (``LIKE``), so "nirvana" resolves to
+    "Nirvana" and a partial like "beatles" still lands.  Albums are annotated
+    with units sold (0 shown as "in catalog") and grouped under each matching
+    artist, so a keyword that hits several artists stays readable.  Answers
+    "which <artist> albums do you have?" — the gap the genre/keyword tools left.
+    """
+    artist = (artist or "").strip()
+    if not artist:
+        return "Which artist would you like albums for? For example: Nirvana, Metallica, or U2."
+
+    rows = _retrieve(
+        """
+        SELECT ar.Name AS artist,
+               al.Title AS album,
+               COALESCE(SUM(il.Quantity), 0) AS units_sold
+        FROM Artist ar
+        JOIN Album al ON al.ArtistId = ar.ArtistId
+        LEFT JOIN Track t ON t.AlbumId = al.AlbumId
+        LEFT JOIN InvoiceLine il ON il.TrackId = t.TrackId
+        WHERE lower(ar.Name) LIKE ?
+        GROUP BY al.AlbumId
+        ORDER BY ar.Name, units_sold DESC, al.Title
+        LIMIT 25
+        """,
+        (f"%{artist.lower()}%",),
+        db_path,
+    )
+
+    if not rows:
+        return (
+            f"I couldn't find any albums by an artist matching '{artist}' in the catalog. "
+            "Want me to search for similar artist names, or browse a genre instead?"
+        )
+
+    by_artist: dict = {}
+    for row in rows:
+        by_artist.setdefault(row["artist"], []).append(row)
+
+    blocks = []
+    for name, albums in by_artist.items():
+        listed = "\n".join(
+            f"- {a['album']}"
+            + (f" ({a['units_sold']} sold)" if a["units_sold"] else " (in catalog)")
+            for a in albums
+        )
+        blocks.append(f"{name}:\n{listed}")
+
+    return "Albums we carry:\n\n" + "\n\n".join(blocks)
+
+
 def top_selling_albums(genre: str = "", db_path: Optional[Path] = None) -> str:
     """Return the best-selling albums overall, or within a genre if one is given.
 

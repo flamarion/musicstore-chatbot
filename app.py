@@ -22,6 +22,7 @@ from langchain.agents.middleware import (
 )
 from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.prompts import ChatPromptTemplate
+from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 from langgraph.checkpoint.memory import InMemorySaver
@@ -32,6 +33,7 @@ from support_bot import (
     browse_albums_by_genre,
     ensure_chinook_database,
     find_artists_by_keyword,
+    get_albums_by_artist,
     get_customer_purchase_history,
     get_inventory_snapshot,
     get_most_common_genres,
@@ -146,6 +148,19 @@ def artist_lookup_tool(keyword: str) -> str:
 
 @tool
 @trace_middleware
+def albums_by_artist_tool(artist: str) -> str:
+    """List the albums a specific artist has in the catalog (e.g. 'Nirvana', 'U2').
+
+    Use this for "which albums do you have by <artist>?" / "do you have any
+    <artist> albums?".  The name is fuzzy-matched and albums show units sold.
+    Prefer this over artist_lookup_tool when the user names one artist and wants
+    their albums, not a list of matching artist names.
+    """
+    return get_albums_by_artist(artist)
+
+
+@tool
+@trace_middleware
 def genre_catalog_tool() -> str:
     """Summarize the most common music genres in the catalog."""
     return get_most_common_genres()
@@ -231,6 +246,7 @@ You have access to the following tools:
 - recommendation_tool: Recommend genres for a customer from their own purchase history (needs a verified email)
 - inventory_tool: Give a quick inventory snapshot for the music store
 - artist_lookup_tool: Search the catalog for artists that match a keyword or style
+- albums_by_artist_tool: List the albums a specific artist has in the catalog — use this for "which albums do you have by <artist>?"
 - genre_catalog_tool: Summarize the most common music genres in the catalog
 - browse_genre_tool: Browse albums in a specific genre (e.g. 'Alternative & Punk'), ranked by sales
 - top_sellers_tool: List the best-selling albums, overall or within a genre
@@ -238,7 +254,7 @@ You have access to the following tools:
 
 This is the Chinook digital music catalog — roughly 275 artists, 350 albums, and 3,500 tracks across genres like Rock, Jazz, Metal, Pop, Blues, and Classical, serving 59 customers worldwide. The lookup tools above already query this data for you; if you ever need the underlying schema or relationships, call store_reference_tool.
 
-**Catalog questions (no identity needed):** For "what do you have in <genre>", use browse_genre_tool. For "what's popular / top selling", use top_sellers_tool (pass the genre if they named one). The catalog does NOT track release dates, so you cannot answer "newest" or "new arrivals" truthfully — say so plainly and offer the best sellers in that genre instead. Never invent recency.
+**Catalog questions (no identity needed):** For "what do you have in <genre>", use browse_genre_tool. For "which albums do you have by <artist>?", use albums_by_artist_tool. For "what's popular / top selling", use top_sellers_tool (pass the genre if they named one). The catalog does NOT track release dates, so you cannot answer "newest" or "new arrivals" truthfully — say so plainly and offer the best sellers in that genre instead. Never invent recency.
 
 **Customer identification — email required for personal data:**
 Purchase history and personal recommendations are private. Release them ONLY after the user gives the email address on the account (it is the one unique identifier).
@@ -535,7 +551,12 @@ def build_llm():
     provider = resolve_provider()
     model = resolve_model(provider)
 
-    kwargs = {"temperature": LLM_TEMPERATURE}
+    # Typed dict[str, Any] (not the inferred dict[str, float]) so the **kwargs
+    # unpack into ChatAnthropic/ChatOpenAI type-checks: a float-valued dict would
+    # make pyright flag every non-float constructor param.  `model` rides in the
+    # dict too — ChatAnthropic exposes it as a pydantic alias, so a literal
+    # model=... trips pyright's "no parameter named model" while **kwargs doesn't.
+    kwargs: dict[str, Any] = {"model": model, "temperature": LLM_TEMPERATURE}
     if MAX_OUTPUT_TOKENS is not None:
         kwargs["max_tokens"] = MAX_OUTPUT_TOKENS
 
@@ -543,11 +564,50 @@ def build_llm():
         from langchain_anthropic import ChatAnthropic  # lazy: optional dependency
 
         logger.info("LLM backend: Anthropic '%s'", model)
-        return ChatAnthropic(model=model, **kwargs)
+        return ChatAnthropic(**kwargs)
 
     endpoint = os.getenv("LLM_ENDPOINT", "http://localhost:8000/v1")
     logger.info("LLM backend: local '%s' at %s", model, endpoint)
-    return ChatOpenAI(model=model, base_url=endpoint, **kwargs)
+    return ChatOpenAI(base_url=endpoint, **kwargs)
+
+
+# ---------------------------------------------------------------------------
+# LangSmith trace tagging — categorize tool runs so the Runs view is sliceable
+# ---------------------------------------------------------------------------
+# Each tool call already shows up in LangSmith as a run_type="tool" run (LangGraph
+# instruments this).  Attaching a category tag + metadata to each tool object
+# propagates into that run's start event, so the Runs view can be filtered/grouped
+# WITHOUT drilling into individual traces — e.g. filter Run Type=tool + tag "pii"
+# to see only personal-data lookups, or group by the tool_category metadata field.
+# The category is the only new fact here; whether a tool "reads_pii" is derived
+# from _PII_CONSENT_PURPOSE (single source of truth) so the two can't drift.
+_TOOL_CATEGORY = {
+    "purchase_history_tool": "account",
+    "recommendation_tool": "account",
+    "inventory_tool": "catalog",
+    "artist_lookup_tool": "catalog",
+    "albums_by_artist_tool": "catalog",
+    "genre_catalog_tool": "catalog",
+    "browse_genre_tool": "catalog",
+    "top_sellers_tool": "catalog",
+    "store_reference_tool": "reference",
+}
+
+
+def _tag_tool_for_tracing(t):
+    """Attach a category tag + metadata to a tool so its LangSmith run is filterable.
+
+    Tags/metadata set on the tool object flow into its run's ``on_tool_start``, so
+    the Runs view can filter by tag (``pii``, ``catalog``, ``account``,
+    ``reference``) or group by the ``tool_category`` metadata field — no per-trace
+    drilling.  ``reads_pii`` reuses the HITL consent set as the single source of
+    truth for what touches personal data.
+    """
+    category = _TOOL_CATEGORY.get(t.name, "catalog")
+    reads_pii = t.name in _PII_CONSENT_PURPOSE
+    t.tags = [category] + (["pii"] if reads_pii else [])
+    t.metadata = {"tool_category": category, "reads_pii": reads_pii}
+    return t
 
 
 # Sentinel: callers pass checkpointer=None to omit persistence (LangGraph Server
@@ -569,11 +629,17 @@ def build_agent(checkpointer: Any = _DEFAULT_CHECKPOINTER):
         recommendation_tool,
         inventory_tool,
         artist_lookup_tool,
+        albums_by_artist_tool,
         genre_catalog_tool,
         browse_genre_tool,
         top_sellers_tool,
         store_reference_tool,
     ]
+
+    # Tag each tool so its run_type="tool" run is filterable/groupable in LangSmith
+    # (by tag or tool_category) without drilling into individual traces.
+    for t in tools:
+        _tag_tool_for_tracing(t)
 
     # The prebuilt ReAct loop (agent <-> tools) plus a middleware stack — two
     # custom guardrails and four LangChain built-ins.  Order is outer→inner:
@@ -594,19 +660,28 @@ def build_agent(checkpointer: Any = _DEFAULT_CHECKPOINTER):
     # An InMemorySaver checkpointer persists per-thread state (messages AND
     # profanity_strikes) and the HITL interrupt, so callers send only the new turn,
     # the 2-strike ban fires across separate messages, and a paused consent survives.
+    #
+    # Annotated ``list[AgentMiddleware[Any, Any, Any]]`` on purpose: each middleware
+    # specializes AgentMiddleware on a different state type (ModelCallLimitState,
+    # GuardrailState, AgentState, ...), and AgentMiddleware's StateT is invariant, so
+    # a bare list literal won't unify to the Sequence[AgentMiddleware[StateT, ...]]
+    # that create_agent expects (pyright: "No overloads match"). Binding all three
+    # params to Any absorbs the invariance and matches the runtime-correct behavior.
+    middleware: list[AgentMiddleware[Any, Any, Any]] = [
+        ProfanityGuardMiddleware(),
+        TopicGuardMiddleware(),
+        system_prompt_middleware,
+        ModelCallLimitMiddleware(run_limit=8, exit_behavior="end"),
+        SummarizationMiddleware(model=llm, trigger=("tokens", 8000), keep=("messages", 20)),
+        PIIMiddleware("email", strategy="redact", apply_to_input=False, apply_to_output=True),
+        ModelRetryMiddleware(max_retries=2, on_failure=_endpoint_down_message),
+        _pii_consent_middleware(),
+    ]
+
     return create_agent(
         model=llm,
         tools=tools,
-        middleware=[
-            ProfanityGuardMiddleware(),
-            TopicGuardMiddleware(),
-            system_prompt_middleware,
-            ModelCallLimitMiddleware(run_limit=8, exit_behavior="end"),
-            SummarizationMiddleware(model=llm, trigger=("tokens", 8000), keep=("messages", 20)),
-            PIIMiddleware("email", strategy="redact", apply_to_input=False, apply_to_output=True),
-            ModelRetryMiddleware(max_retries=2, on_failure=_endpoint_down_message),
-            _pii_consent_middleware(),
-        ],
+        middleware=middleware,
         checkpointer=checkpointer,
     )
 
@@ -628,7 +703,7 @@ if __name__ == "__main__":
     logger.addHandler(handler)
 
     app = build_agent()
-    config = {"configurable": {"thread_id": "smoke-test"}}
+    config: RunnableConfig = {"configurable": {"thread_id": "smoke-test"}}
     for prompt in ["Recommend music for Luis", "Show my invoice history for Luis"]:
         print(f"> {prompt}")
         output = app.invoke({"messages": [HumanMessage(content=prompt)]}, config=config)

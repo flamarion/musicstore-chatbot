@@ -22,7 +22,7 @@ Built with LangChain `create_agent` (prebuilt ReAct loop, agent ⇄ tools) + a m
 - `ModelRetryMiddleware(on_failure=_endpoint_down_message)` (built-in) — retry with backoff, then friendly message (replaced the old custom `EndpointFallbackMiddleware`).
 - `HumanInTheLoopMiddleware` (built-in, `_pii_consent_middleware()`) — **consent gate**: interrupts before `purchase_history_tool` / `recommendation_tool` for approve/reject, but only when an email is present (`when` predicate); catalog tools auto-approve. Needs the checkpointer to persist the pause; resume with `Command(resume={"decisions":[{"type":"approve"|"reject"}]})`.
 - `InMemorySaver` checkpointer — persists per-`thread_id` state (`messages` + `profanity_strikes`) **and** the HITL interrupt; callers send only the new turn.
-- 8 tools (7 lookups + `store_reference_tool`) run against the Chinook SQLite DB via one `@traceable(run_type="retriever")` `_retrieve()` helper (retriever runs); the richest formatter is `@traceable(run_type="parser")`. Catalog lookups include `browse_genre_tool` and `top_sellers_tool`.
+- 9 tools (8 lookups + `store_reference_tool`) run against the Chinook SQLite DB via one `@traceable(run_type="retriever")` `_retrieve()` helper (retriever runs); the richest formatter is `@traceable(run_type="parser")`. Catalog lookups include `albums_by_artist_tool` (albums for a named artist), `browse_genre_tool` and `top_sellers_tool`. Each tool object carries a category tag (`catalog`/`account`/`reference`) + `reads_pii` metadata (derived from the HITL consent set) so its `tool` run is filterable/groupable in LangSmith without drilling into traces.
 - Model backend is **hosted Claude or a local endpoint**, chosen by `resolve_provider()` (`LLM_PROVIDER` / auto-detect from `ANTHROPIC_API_KEY`).
 
 Full diagram and component table: [README.md](README.md#architecture).
@@ -31,7 +31,7 @@ Full diagram and component table: [README.md](README.md#architecture).
 
 | File | Purpose |
 |---|---|
-| [app.py](app.py) | `create_agent` + middleware stack (guardrails, dynamic prompt, PII, retry, HITL consent), `InMemorySaver`, 8 tools, model-backend selection, `ChatPromptTemplate` system prompt |
+| [app.py](app.py) | `create_agent` + middleware stack (guardrails, dynamic prompt, PII, retry, HITL consent), `InMemorySaver`, 9 tools (+ per-tool LangSmith trace tags), model-backend selection, `ChatPromptTemplate` system prompt |
 | [support_bot.py](support_bot.py) | Chinook DB access via `_retrieve()` (traced `retriever`) + tool implementations, catalog queries, email-only identity gate (`resolve_customer_for_pii`) |
 | [demo.py](demo.py) | Sample (`--sample`) and interactive runners; `resolve_consent()` handles the HITL interrupt/resume |
 | [langgraph.json](langgraph.json) | LangGraph Server/Studio config → `app.py:make_graph` (deploy the graph via `langgraph dev` / `langgraph up`) |

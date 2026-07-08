@@ -11,7 +11,7 @@
 ## Key Files
 | File | Purpose |
 |---|---|
-| `app.py` | `create_agent` agent + middleware stack (custom guardrail + 4 built-ins) + `InMemorySaver` checkpointer, loads `.env`, 8 tools, model-backend selection, structured logging |
+| `app.py` | `create_agent` agent + middleware stack (custom guardrail + 4 built-ins) + `InMemorySaver` checkpointer, loads `.env`, 9 tools (+ per-tool LangSmith trace tags), model-backend selection, structured logging |
 | `support_bot.py` | Database queries (Chinook DB), tool implementations, catalog queries, email-only identity gate (`resolve_customer_for_pii`) |
 | `demo.py` | Sample and interactive demo runners; `reset_session`, `render_context_meter` |
 | `database_context.md` | Schema and data insights, served on demand via `store_reference_tool` |
@@ -44,7 +44,7 @@ TRACE_ENABLED=1 TRACE_RAW=1 python demo.py
 - **Agent**: LangChain `create_agent` (prebuilt ReAct loop) — NO hand-rolled `StateGraph`
 - **Middleware**: 2 custom guardrails — `ProfanityGuardMiddleware` (`before_model`, whole-word profanity, owns `profanity_strikes`, runs first) + `TopicGuardMiddleware` (`before_model`, topic keyword filter), both `jump_to="end"` — a dynamic system prompt (`system_prompt_middleware`, `@dynamic_prompt`), plus 5 built-ins: `ModelCallLimitMiddleware` (loop cap), `SummarizationMiddleware` (context mgmt), `PIIMiddleware` (email redacted in replies only; `apply_to_input=False` so lookups work), `ModelRetryMiddleware` (retry + friendly message), `HumanInTheLoopMiddleware` (consent gate before personal-data tools)
 - **State**: `InMemorySaver` checkpointer owns per-`thread_id` `messages` + `profanity_strikes` + HITL interrupts; runner sends only the new message each turn; `/clear` = fresh thread
-- **Tools**: 8 tools — `purchase_history_tool`, `recommendation_tool`, `inventory_tool`, `artist_lookup_tool`, `genre_catalog_tool`, `browse_genre_tool`, `top_sellers_tool`, `store_reference_tool`; all DB access routes through `_retrieve()` (`@traceable(run_type="retriever")`)
+- **Tools**: 9 tools — `purchase_history_tool`, `recommendation_tool`, `inventory_tool`, `artist_lookup_tool`, `albums_by_artist_tool`, `genre_catalog_tool`, `browse_genre_tool`, `top_sellers_tool`, `store_reference_tool`; all DB access routes through `_retrieve()` (`@traceable(run_type="retriever")`). Each tool object is tagged (category + `reads_pii` metadata) so its `tool` run is filterable in LangSmith
 - **System Prompt**: a `ChatPromptTemplate` rendered per turn via `@dynamic_prompt` (keeps "Current date" fresh, traces as `run_type="prompt"`) — store overview + tool list + email-only identification + catalog-tool guidance; full schema served on demand via `store_reference_tool`
 - **Deployment**: `docker compose up --build` → llama.cpp + LangGraph server (Postgres/Redis, from generated `Dockerfile`) + `agent-chat-ui` on the `ai-stack` network; needs `LANGSMITH_API_KEY` + `llama.env`
 - **Identity**: email-only PII gate (`resolve_customer_for_pii`); a name never unlocks personal data and matching accounts are never enumerated
